@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  # Redis for message bus
+  redis:
+    image: redis:7-alpine
+    container_name: trading-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # PostgreSQL for data storage (optional, for future use)
+  postgres:
+    image: postgres:15-alpine
+    container_name: trading-postgres
+    environment:
+      POSTGRES_DB: trading_db
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Redis Commander (GUI for Redis)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: trading-redis-gui
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # Grafana for monitoring (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trading-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+
+  # Development services (optional)
+  # Uncomment to run trading services in containers
+
+  # data-ingestor:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.service
+  #   container_name: trading-data-ingestor
+  #   environment:
+  #     - SERVICE_NAME=data_ingestor
+  #     - REDIS_URL=redis://redis:6379
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./apps/data_ingestor:/app/apps/data_ingestor
+  #     - ./lib:/app/lib
+
+  # strategies:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.service
+  #   container_name: trading-strategies
+  #   environment:
+  #     - SERVICE_NAME=strategies
+  #     - REDIS_URL=redis://redis:6379
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./apps/strategies:/app/apps/strategies
+  #     - ./lib:/app/lib
+
+  # risk-manager:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.service
+  #   container_name: trading-risk-manager
+  #   environment:
+  #     - SERVICE_NAME=risk_manager
+  #     - REDIS_URL=redis://redis:6379
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./apps/risk_manager:/app/apps/risk_manager
+  #     - ./lib:/app/lib
+
+  # executor:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.service
+  #   container_name: trading-executor
+  #   environment:
+  #     - SERVICE_NAME=executor
+  #     - REDIS_URL=redis://redis:6379
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./apps/executor:/app/apps/executor
+  #     - ./lib:/app/lib
+
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.api
+  #   container_name: trading-api
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./apps/api:/app/apps/api
+  #     - ./lib:/app/lib
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  default:
+    name: trading-network

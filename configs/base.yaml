@@ -1,0 +1,211 @@
+# Trading Platform Configuration
+# Base configuration for all environments
+
+system:
+  name: "algorithmic-trading-platform"
+  version: "1.0.0"
+  environment: "development"
+  
+# Redis Message Bus
+redis:
+  url: "redis://localhost:6379"
+  decode_responses: true
+  socket_connect_timeout: 5
+  socket_timeout: 5
+
+# Database (for future implementation)
+database:
+  url: "postgresql://trading:password@localhost/trading_db"
+  echo: false
+  pool_size: 10
+
+# Alpaca Broker Configuration
+alpaca:
+  base_url: "https://paper-api.alpaca.markets"
+  # API keys loaded from environment variables
+  paper_trading: true
+  
+# Market Data
+market_data:
+  symbols:
+    - "AAPL"
+    - "MSFT" 
+    - "GOOGL"
+    - "TSLA"
+    - "NVDA"
+  
+  timeframes:
+    primary: "1m"
+    secondary: "5m"
+    daily: "1d"
+  
+  historical_days: 30
+  live_updates: true
+
+# Strategy Configuration
+strategies:
+  - name: "random_50_50"
+    enabled: true
+    description: "Random 50/50 strategy for testing infrastructure"
+    symbols: 
+      - "AAPL"
+      - "MSFT"
+      - "GOOGL"
+      - "TSLA"
+      - "NVDA"
+    timeframe: "1m"
+    risk_per_trade: 0.02
+    max_positions: 5
+    parameters:
+      probability_threshold: 0.5
+      
+  - name: "smart_technical"
+    enabled: true
+    description: "Technical analysis strategy using SMA, RSI, MACD"
+    symbols:
+      - "AAPL"
+      - "MSFT"
+      - "GOOGL"
+      - "TSLA"
+      - "NVDA"
+    timeframe: "1m"
+    risk_per_trade: 0.05
+    max_positions: 3
+    parameters:
+      sma_short: 20
+      sma_long: 50
+      rsi_period: 14
+      rsi_oversold: 30
+      rsi_overbought: 70
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      min_confidence: 0.6
+
+# Risk Management
+risk:
+  max_daily_loss: 0.05          # 5% maximum daily loss
+  max_portfolio_risk: 0.20      # 20% maximum portfolio risk
+  max_position_size: 0.10       # 10% maximum position size
+  stop_loss_pct: 0.02           # 2% stop loss
+  take_profit_pct: 0.06         # 6% take profit
+  
+  # Position limits
+  max_positions_per_symbol: 1
+  max_total_positions: 10
+  
+  # Cooldown periods (seconds)
+  signal_cooldown: 300          # 5 minutes between signals per symbol
+  order_cooldown: 60            # 1 minute between orders per symbol
+
+# Execution
+execution:
+  order_type: "market"          # Default order type
+  time_in_force: "day"          # Order duration
+  commission: 0.0               # Alpaca is commission-free
+  
+  # Order validation
+  min_order_value: 1.0          # Minimum $1 order
+  max_order_value: 10000.0      # Maximum $10k order
+  
+  # Retry logic
+  max_retries: 3
+  retry_delay: 5                # seconds
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Log files
+  files:
+    main: "logs/trading.log"
+    data: "logs/data.log"
+    strategies: "logs/strategies.log"
+    risk: "logs/risk.log"
+    execution: "logs/execution.log"
+    api: "logs/api.log"
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  debug: true
+  reload: true
+  
+  # CORS
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  
+  # Rate limiting
+  rate_limit: "100/minute"
+
+# Monitoring & Alerting
+monitoring:
+  health_check_interval: 30     # seconds
+  metrics_collection: true
+  
+  # Alerts
+  alerts:
+    daily_loss_threshold: 0.03  # Alert at 3% daily loss
+    position_size_threshold: 0.08  # Alert at 8% position size
+    
+  # Performance tracking
+  track_latency: true
+  track_fill_rate: true
+  track_slippage: true
+
+# Data Storage
+storage:
+  # Time series data
+  timeseries:
+    enabled: false              # Disable for now
+    backend: "postgresql"       # or "questdb", "timescaledb"
+    retention_days: 365
+    
+  # File storage for backtests
+  files:
+    data_dir: "data/"
+    backup_dir: "backups/"
+    export_format: "parquet"
+
+# Services Configuration
+services:
+  data_ingestor:
+    enabled: true
+    restart_policy: "always"
+    health_check: true
+    
+  strategies:
+    enabled: true
+    restart_policy: "always"
+    health_check: true
+    
+  risk_manager:
+    enabled: true
+    restart_policy: "always"
+    health_check: true
+    
+  executor:
+    enabled: true
+    restart_policy: "always" 
+    health_check: true
+    
+  api:
+    enabled: true
+    restart_policy: "always"
+    health_check: true
+
+# Development/Testing
+development:
+  mock_trading: false           # Use real Alpaca paper trading
+  fast_mode: false             # Skip some validations for testing
+  debug_signals: true          # Log all signals
+  
+# Feature Flags
+features:
+  live_trading: false          # Disable live trading (paper only)
+  machine_learning: false     # ML features not implemented yet
+  crypto_trading: false       # Crypto not implemented yet
+  options_trading: false      # Options not implemented yet
