@@ -8,6 +8,7 @@ Handles communication between microservices
 import json
 import asyncio
 import logging
+import os
 from typing import Any, Callable, Dict, Optional, AsyncGenerator
 from datetime import datetime
 from lib.models import Bar, Signal, OrderIntent, OrderFill, MessageEvent
@@ -16,7 +17,7 @@ from lib.settings import get_settings
 logger = logging.getLogger(__name__)
 
 def _connect_redis():
-    """Connect to Redis with fallback to fakeredis"""
+    """Connect to Redis with automatic fallback to fakeredis"""
     settings = get_settings()
     
     # Force fake redis if USE_FAKE_REDIS=1 or if settings say so
@@ -57,6 +58,10 @@ class MessageBus:
         self.redis_client = redis_client or _connect_redis()
         self.pubsub = None
         self.subscribers: Dict[str, Callable] = {}
+        
+        # Log which Redis we're using
+        redis_type = "FakeRedis" if "fakeredis" in str(type(self.redis_client)) else "Real Redis"
+        logger.info(f"MessageBus initialized with {redis_type}")
         
     def connect(self):
         """Connect to Redis (already done in __init__)"""
@@ -123,16 +128,19 @@ class MessageBus:
         self._publish(channel, message, "system_event")
     
     def _publish(self, channel: str, message: str, msg_type: str):
-        """Internal publish method"""
+        """Internal publish method with better error handling"""
         try:
             if not self.redis_client:
                 raise Exception("Not connected to Redis")
             
             result = self.redis_client.publish(channel, message)
             logger.debug(f"Published {msg_type} to {channel}: {result} subscribers")
+            return result
             
         except Exception as e:
             logger.error(f"Failed to publish {msg_type} to {channel}: {e}")
+            # Don't re-raise in production to avoid crashing the service
+            return 0
     
     # Subscription Methods
     async def subscribe_bars(self, symbol: str = "*") -> AsyncGenerator[Bar, None]:
@@ -165,30 +173,35 @@ class MessageBus:
             yield event
     
     async def _subscribe_with_parser(self, pattern: str, model_class):
-        """Generic subscription with automatic parsing"""
+        """Generic subscription with automatic parsing and fakeredis compatibility"""
         if not self.redis_client:
             raise Exception("Not connected to Redis")
         
         pubsub = self.redis_client.pubsub()
         
         try:
-            # Handle pattern vs specific subscription
+            # Handle pattern vs specific subscription - improved for fakeredis
             if "*" in pattern:
                 # For fakeredis compatibility, expand wildcard patterns to specific channels
                 if pattern.startswith("bars."):
                     # Subscribe to specific bar channels for known symbols
-                    from lib.settings import get_settings
                     settings = get_settings()
                     channels = [f"bars.{symbol}" for symbol in settings.symbols_list]
-                    logger.info(f"Expanding pattern {pattern} to specific channels: {channels}")
+                    logger.debug(f"Expanding pattern {pattern} to specific channels: {channels}")
                     for channel in channels:
                         pubsub.subscribe(channel)
                 elif pattern.startswith("signals."):
                     # Subscribe to specific signal channels
-                    from lib.settings import get_settings
                     settings = get_settings()
                     channels = [f"signals.{symbol}" for symbol in settings.symbols_list]
-                    logger.info(f"Expanding pattern {pattern} to specific channels: {channels}")
+                    logger.debug(f"Expanding pattern {pattern} to specific channels: {channels}")
+                    for channel in channels:
+                        pubsub.subscribe(channel)
+                elif pattern.startswith("orders.fill."):
+                    # Subscribe to specific fill channels
+                    settings = get_settings()
+                    channels = [f"orders.fill.{symbol}" for symbol in settings.symbols_list]
+                    logger.debug(f"Expanding pattern {pattern} to specific channels: {channels}")
                     for channel in channels:
                         pubsub.subscribe(channel)
                 elif pattern.startswith("system."):
@@ -196,21 +209,26 @@ class MessageBus:
                     system_events = [
                         "system.service_start", "system.service_stop", "system.service_error",
                         "system.signal_generated", "system.signal_rejected", "system.signal_approved",
-                        "system.historical_data_complete", "system.order_error", "system.emergency_stop"
+                        "system.historical_data_complete", "system.order_error", "system.emergency_stop",
+                        "system.heartbeat"
                     ]
-                    logger.info(f"Expanding pattern {pattern} to system events: {system_events}")
+                    logger.debug(f"Expanding pattern {pattern} to system events: {system_events}")
                     for channel in system_events:
                         pubsub.subscribe(channel)
                 else:
-                    # Fallback to pattern subscription for other cases
-                    logger.warning(f"Using pattern subscription for {pattern} - may not work with fakeredis")
+                    # Try pattern subscription for real Redis
+                    logger.debug(f"Using pattern subscription for {pattern}")
                     pubsub.psubscribe(pattern)
             else:
                 pubsub.subscribe(pattern)
             
             logger.info(f"Subscribed to {pattern}")
             
-            while True:
+            # Message processing loop with improved error handling
+            consecutive_errors = 0
+            max_consecutive_errors = 5
+            
+            while consecutive_errors < max_consecutive_errors:
                 try:
                     message = pubsub.get_message(timeout=1.0)
                     if message and message['type'] in ['message', 'pmessage']:
@@ -218,18 +236,25 @@ class MessageBus:
                             # Parse JSON and create model instance
                             data = json.loads(message['data'])
                             instance = model_class.model_validate(data)
+                            consecutive_errors = 0  # Reset on success
                             yield instance
                             
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON decode error for message: {e}")
+                            consecutive_errors += 1
                         except Exception as parse_error:
                             logger.error(f"Failed to parse message: {parse_error}")
-                            continue
+                            consecutive_errors += 1
                     
                     # Allow other coroutines to run
                     await asyncio.sleep(0.001)
                     
                 except Exception as msg_error:
-                    logger.error(f"Error receiving message: {msg_error}")
+                    consecutive_errors += 1
+                    logger.error(f"Error receiving message (#{consecutive_errors}): {msg_error}")
                     await asyncio.sleep(0.1)
+            
+            logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping subscription to {pattern}")
                     
         except Exception as e:
             logger.error(f"Subscription error for {pattern}: {e}")
@@ -243,6 +268,7 @@ class MessageBus:
     def publish_bar_sync(self, symbol: str, timestamp: datetime, open_p: float, 
                          high: float, low: float, close: float, volume: int):
         """Synchronous bar publishing helper"""
+        from lib.models import TimeFrame
         bar = Bar(
             symbol=symbol,
             timestamp=timestamp,
@@ -250,7 +276,8 @@ class MessageBus:
             high=high,
             low=low,
             close=close,
-            volume=volume
+            volume=volume,
+            timeframe=TimeFrame.MINUTE
         )
         self.publish_bar(bar)
     
@@ -284,14 +311,17 @@ class MessageBus:
                 connected_clients = info.get('connected_clients', 0)
                 used_memory = info.get('used_memory_human', 'unknown')
                 redis_version = info.get('redis_version', 'unknown')
+                redis_type = "Real Redis"
             except:
                 # Fallback for fakeredis
                 connected_clients = 1
                 used_memory = 'fake'
                 redis_version = 'fakeredis'
+                redis_type = "FakeRedis"
             
             return {
                 "status": "healthy",
+                "type": redis_type,
                 "latency_ms": round(latency, 2),
                 "connected_clients": connected_clients,
                 "used_memory": used_memory,
@@ -319,6 +349,7 @@ class MessageBus:
                     channels[channel] = subscribers
                 
                 return {
+                    "type": "Real Redis",
                     "channels": channels,
                     "total_channels": len(channels),
                     "total_subscribers": sum(channels.values())
@@ -326,9 +357,10 @@ class MessageBus:
             except:
                 # Fallback for fakeredis
                 return {
-                    "channels": {"fake": 1},
-                    "total_channels": 1,
-                    "total_subscribers": 1,
+                    "type": "FakeRedis",
+                    "channels": {"note": "FakeRedis - limited stats"},
+                    "total_channels": 0,
+                    "total_subscribers": 0,
                     "note": "Using fakeredis - limited stats available"
                 }
             
@@ -340,7 +372,7 @@ message_bus = None
 
 # Convenience functions
 def connect_bus(redis_url: str = None) -> bool:
-    """Connect to message bus"""
+    """Connect to message bus with automatic fallback"""
     global message_bus
     
     if redis_url:
@@ -350,7 +382,7 @@ def connect_bus(redis_url: str = None) -> bool:
             redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
             message_bus = MessageBus(redis_client)
         except:
-            message_bus = MessageBus()  # Use default connection
+            message_bus = MessageBus()  # Use default connection with fallback
     else:
         message_bus = MessageBus()
     

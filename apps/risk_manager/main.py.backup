@@ -9,7 +9,7 @@ import os
 import asyncio
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from collections import defaultdict
 import uuid
@@ -196,9 +196,7 @@ class EnhancedRiskManager:
         
         # 5. Check signal expiration
         if hasattr(signal, 'expire_seconds') and signal.expire_seconds:
-            # Use timezone-aware datetime for comparison
-            current_time = datetime.now(timezone.utc) if signal.timestamp.tzinfo else datetime.utcnow()
-            signal_age = (current_time - signal.timestamp).total_seconds()
+            signal_age = (datetime.utcnow() - signal.timestamp).total_seconds()
             if signal_age > signal.expire_seconds:
                 return False, f"Signal expired: {signal_age:.0f}s > {signal.expire_seconds}s"
         

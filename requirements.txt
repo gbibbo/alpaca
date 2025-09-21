@@ -6,13 +6,13 @@ pydantic-settings==2.*
 python-dotenv>=1.0.0
 pyyaml>=6.0
 
-# Trading & Market Data
+# Trading & Market Data (ONLY alpaca-py, removed legacy libraries)
 alpaca-py==0.42.*
 yfinance>=0.2.18
 
 # Message Bus
-redis==6.4.0
-fakeredis==2.26.*
+redis>=5,<7
+fakeredis>=2.26,<3
 
 # Web API
 fastapi==0.117.*
@@ -32,8 +32,8 @@ psycopg2-binary>=2.9.0
 alembic>=1.10.0
 
 # Development
-pytest==8.*
-pytest-asyncio==0.23.*
+pytest>=8,<9
+pytest-asyncio>=0.23,<1
 black>=23.0.0
 flake8>=6.0.0
 
