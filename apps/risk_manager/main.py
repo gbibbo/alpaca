@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+apps/risk_manager/main.py
 Risk Manager - Fixed version with unified configuration
 Validates and filters trading signals, applies position sizing and risk limits
 """

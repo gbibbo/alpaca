@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+apps/api/main.py
 FastAPI Service - System monitoring and control
 Provides REST API for querying system state and sending commands
 """

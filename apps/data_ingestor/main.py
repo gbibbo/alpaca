@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+apps/data_ingestor/main.py
 Data Ingestor - Alpaca Market Data to Redis Bus (Fixed Version)
 Downloads historical and live data, publishes to message bus with unified configuration
 """

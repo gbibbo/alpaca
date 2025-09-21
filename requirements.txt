@@ -1,22 +1,22 @@
 # Core dependencies
 pandas>=2.0.0
 numpy>=1.21.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+pydantic==2.11.*
+pydantic-settings==2.*
 python-dotenv>=1.0.0
 pyyaml>=6.0
 
 # Trading & Market Data
-alpaca-py>=0.42.0
+alpaca-py==0.42.*
 yfinance>=0.2.18
 
 # Message Bus
-redis>=4.5.0
-fakeredis>=2.26.0
+redis==6.4.0
+fakeredis==2.26.*
 
 # Web API
-fastapi>=0.100.0
-uvicorn[standard]>=0.20.0
+fastapi==0.117.*
+uvicorn[standard]==0.36.*
 
 # Async support
 asyncio-mqtt>=0.13.0
@@ -32,8 +32,8 @@ psycopg2-binary>=2.9.0
 alembic>=1.10.0
 
 # Development
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+pytest==8.*
+pytest-asyncio==0.23.*
 black>=23.0.0
 flake8>=6.0.0
 

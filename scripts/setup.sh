@@ -1,4 +1,5 @@
 #!/bin/bash
+# scripts/setup.sh
 # Trading Platform Setup Script
 # Sets up the complete modular trading system according to ChatGPT architecture
 

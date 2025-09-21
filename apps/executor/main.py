@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+apps/executor/main.py
 Executor - Executes orders with Alpaca broker (Fixed Version)
 Consumes order intents, submits to Alpaca, publishes fill results
 """

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+scripts/launcher.py
 Trading Platform Launcher - Fixed version
 Orchestrates multiple microservices with fallback support
 """

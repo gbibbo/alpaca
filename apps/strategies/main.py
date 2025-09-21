@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+apps/strategies/main.py
 Trading Strategies - Fixed version with unified configuration
 Consumes market bars and generates trading signals
 """
