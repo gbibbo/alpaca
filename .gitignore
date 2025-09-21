@@ -1,0 +1,79 @@
+# Credenciales y configuración sensible
+.env
+*.env
+.env.*
+config.json
+secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Entornos virtuales
+finrl_alpaca/
+trading_env/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Logs y datos temporales
+*.log
+*.tmp
+*.temp
+logs/
+temp/
+data/
+*.csv
+*.json
+*.xlsx
+*.pkl
+
+# Archivos de sistema
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Archivos de trading específicos
+backtest_results/
+trading_logs/
+portfolio_data/
+*.db
+*.sqlite
+
+# Archivos temporales de pip
+pip-log.txt
+pip-delete-this-directory.txt
