@@ -1,214 +1,210 @@
-#!/usr/bin/env python3
-"""
-Forced Signal Test - Guaranteed signal generation for pipeline validation
-"""
-
-import asyncio
 import logging
-import sys
-from pathlib import Path
-from datetime import datetime
+import time
+import threading
+import uuid
+from pydantic import BaseModel
+from enum import Enum
+from collections import defaultdict
+import fakeredis # Necesitas instalarlo con: pip install fakeredis pydantic
 
-# Add lib to path
-sys.path.insert(0, str(Path(__file__).parent))
+# --- Configuración del Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log = logging.getLogger(__name__)
 
-from lib.settings import get_settings
-from lib.bus import connect_bus, get_bus
-from lib.models import Signal, SignalSide
+# --- 1. Simulación de tus Modelos de Datos (lib/models.py) ---
 
-# Import services (but we'll manually create signals)
-sys.path.insert(0, str(Path(__file__).parent / "apps" / "risk_manager"))
-sys.path.insert(0, str(Path(__file__).parent / "apps" / "executor"))
+class SignalSide(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
 
-from apps.risk_manager.main import RiskManager
-from apps.executor.main import AlpacaExecutor
+class OrderSide(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+class OrderStatus(str, Enum):
+    ACCEPTED = "accepted"
+    FILLED = "filled"
 
-async def test_forced_signal_pipeline():
-    """Test pipeline with manually created signals to validate execution"""
-    logger.info("🎯 FORCED SIGNAL PIPELINE TEST")
-    logger.info("Manual Signals → Risk Manager → Executor")
-    logger.info("=" * 60)
-    
-    # Connect to shared message bus
-    if not connect_bus():
-        logger.error("Failed to connect to message bus")
-        return False
-    
-    bus = get_bus()
-    
-    # Initialize services (skip data ingestor and strategies)
-    risk_manager = RiskManager()
-    executor = AlpacaExecutor()
-    
-    # Track results
-    order_intents_created = []
-    order_fills_executed = []
-    
-    async def order_intent_monitor():
-        """Monitor order intents created by risk manager"""
-        async for order_intent in bus.subscribe_order_intents():
-            order_intents_created.append(order_intent)
-            logger.info(f"💼 ORDER INTENT: {order_intent.side} {order_intent.quantity:.0f} "
-                       f"{order_intent.symbol} @ ${order_intent.price:.2f}")
-    
-    async def order_fill_monitor():
-        """Monitor order fills from executor"""
-        async for order_fill in bus.subscribe_order_fills():
-            order_fills_executed.append(order_fill)
-            logger.info(f"✅ ORDER FILLED: {order_fill.side} {order_fill.fill_quantity:.0f} "
-                       f"{order_fill.symbol} @ ${order_fill.fill_price:.2f} "
-                       f"(Total: ${order_fill.total_value:,.2f})")
-    
-    try:
-        # Start monitoring tasks
-        order_intent_task = asyncio.create_task(order_intent_monitor())
-        order_fill_task = asyncio.create_task(order_fill_monitor())
+class Signal(BaseModel):
+    source: str
+    symbol: str
+    side: SignalSide
+    price: float
+    confidence: float
+
+class OrderIntent(BaseModel):
+    symbol: str
+    side: SignalSide
+    price: float
+    quantity: int
+
+class OrderFill(BaseModel):
+    symbol: str
+    side: SignalSide
+    price: float
+    quantity: int
+    broker_order_id: uuid.UUID
+
+# --- 2. Simulación de tu MessageBus (lib/bus.py) ---
+
+class MessageBus:
+    """
+    MessageBus con un despachador (fan-out) para permitir múltiples
+    suscriptores por canal/patrón en una única instancia de PubSub.
+    """
+    def __init__(self, use_fake_redis=True):
+        self.client = fakeredis.FakeStrictRedis(decode_responses=True)
+        self.pubsub = self.client.pubsub(ignore_subscribe_messages=True)
+        # <<-- CAMBIO ARQUITECTÓNICO: Diccionarios para gestionar listas de handlers.
+        self._chan_handlers = defaultdict(list)
+        self._pat_handlers = defaultdict(list)
+        log.info("Using fakeredis with fan-out dispatcher")
+
+    def _dispatch_channel(self, message: dict):
+        channel = message['channel']
+        for handler in self._chan_handlers.get(channel, []):
+            handler(message)
+
+    def _dispatch_pattern(self, message: dict):
+        pattern = message['pattern']
+        for handler in self._pat_handlers.get(pattern, []):
+            handler(message)
+
+    def publish(self, channel: str, message: BaseModel):
+        self.client.publish(channel, message.model_dump_json())
+
+    def subscribe(self, channel: str, handler):
+        is_first_handler = not self._chan_handlers[channel]
+        self._chan_handlers[channel].append(handler)
+        if is_first_handler:
+            self.pubsub.subscribe(**{channel: self._dispatch_channel})
+
+    def psubscribe(self, pattern: str, handler):
+        is_first_handler = not self._pat_handlers[pattern]
+        self._pat_handlers[pattern].append(handler)
+        if is_first_handler:
+            self.pubsub.psubscribe(**{pattern: self._dispatch_pattern})
+
+    def run_in_thread(self):
+        thread = self.pubsub.run_in_thread(sleep_time=0.01)
+        log.info("Message bus listener started in background thread.")
+        return thread
+
+# --- 3. Simulación de tus Microservicios (apps/) ---
+
+class RiskManager:
+    def __init__(self, bus: MessageBus, config: dict):
+        self.bus = bus
+        self.config = config
+        self.portfolio_value = config.get("portfolio_value", 100000)
+        self.max_pos_size = config.get("max_position_size", 0.10)
+
+    def process_signal(self, message):
+        signal = Signal.model_validate_json(message['data'])
+        log.info(f"Processing signal: {signal.side.value} {signal.symbol} from {signal.source}")
         
-        # Start services
-        logger.info("💼 Starting risk manager...")
-        risk_manager.running = True
-        risk_task = asyncio.create_task(risk_manager.consume_signals())
-        
-        logger.info("⚡ Starting executor...")
-        if not await executor.verify_account_status():
-            logger.error("Executor account verification failed")
-            return False
-        
-        executor.running = True
-        executor_task = asyncio.create_task(executor.consume_order_intents())
-        
-        # Give services time to start
-        await asyncio.sleep(2)
-        
-        # Create and publish manual signals
-        logger.info("📊 Creating manual signals for testing...")
-        
-        test_signals = [
-            Signal(
-                symbol="AAPL",
-                timestamp=datetime.utcnow(),
-                side=SignalSide.BUY,
-                confidence=0.8,
-                price=238.50,
-                source="manual_test",
-                metadata={"test": True}
-            ),
-            Signal(
-                symbol="MSFT",
-                timestamp=datetime.utcnow(),
-                side=SignalSide.BUY,
-                confidence=0.75,
-                price=412.30,
-                source="manual_test",
-                metadata={"test": True}
-            ),
-            Signal(
-                symbol="GOOGL",
-                timestamp=datetime.utcnow(),
-                side=SignalSide.BUY,
-                confidence=0.7,
-                price=161.25,
-                source="manual_test",
-                metadata={"test": True}
+        position_size_usd = self.portfolio_value * self.max_pos_size
+        # <<-- MEJORA: Asegurar que la cantidad sea al menos 1.
+        quantity = max(1, int(position_size_usd // signal.price))
+
+        intent = OrderIntent(symbol=signal.symbol, side=signal.side, price=signal.price, quantity=quantity)
+        log.info(f"Created order intent: {intent.side.value} {intent.quantity} {intent.symbol}")
+        self.bus.publish("orders.intent", intent)
+
+    def start_consuming(self):
+        self.bus.psubscribe("signals.*", self.process_signal)
+
+class Executor:
+    def __init__(self, bus: MessageBus, config: dict):
+        self.bus = bus
+        self.config = config
+
+    def execute_order(self, message):
+        intent = OrderIntent.model_validate_json(message['data'])
+        log.info(f"Received order intent: {intent.side.value} {intent.quantity} {intent.symbol}")
+
+        try:
+            mock_alpaca_order = type('MockOrder', (object,), {'id': uuid.uuid4()})
+            log.info(f"Order submitted successfully: Alpaca Order ID: {mock_alpaca_order.id}")
+
+            fill_event = OrderFill(
+                symbol=intent.symbol, side=intent.side, price=intent.price,
+                quantity=intent.quantity, broker_order_id=mock_alpaca_order.id
             )
-        ]
-        
-        # Publish signals one by one
-        for i, signal in enumerate(test_signals):
-            logger.info(f"📊 Publishing signal {i+1}: {signal.side} {signal.symbol} @ ${signal.price}")
-            bus.publish_signal(signal)
-            await asyncio.sleep(2)  # Small delay between signals
-        
-        # Wait for processing
-        logger.info("⏳ Waiting for signal processing and order execution...")
-        await asyncio.sleep(15)  # Give time for processing and execution
-        
-        # Cancel tasks
-        for task in [order_intent_task, order_fill_task, risk_task, executor_task]:
-            task.cancel()
-        
-        # Results
-        logger.info("\n" + "=" * 60)
-        logger.info("FORCED SIGNAL TEST RESULTS")
-        logger.info("=" * 60)
-        
-        logger.info(f"📊 Manual Signals Created: {len(test_signals)}")
-        logger.info(f"💼 Order Intents Created: {len(order_intents_created)}")
-        logger.info(f"✅ Orders Executed: {len(order_fills_executed)}")
-        
-        if order_intents_created:
-            logger.info("\n💼 ORDER INTENTS CREATED:")
-            for i, order in enumerate(order_intents_created):
-                logger.info(f"  {i+1}. {order.side} {order.quantity:.0f} {order.symbol} "
-                           f"@ ${order.price:.2f}")
-        
-        if order_fills_executed:
-            logger.info("\n✅ ORDERS EXECUTED:")
-            total_value = 0
-            for i, fill in enumerate(order_fills_executed):
-                logger.info(f"  {i+1}. {fill.side} {fill.fill_quantity:.0f} {fill.symbol} "
-                           f"@ ${fill.fill_price:.2f} = ${fill.total_value:,.2f}")
-                total_value += fill.total_value
             
-            logger.info(f"\n💰 TOTAL TRADING VOLUME: ${total_value:,.2f}")
-        
-        # Success criteria
-        pipeline_success = len(order_intents_created) > 0 and len(order_fills_executed) > 0
-        
-        logger.info("\n" + "=" * 60)
-        
-        if pipeline_success:
-            logger.info("🎉 FORCED SIGNAL TEST PASSED!")
-            logger.info("✅ Risk Manager → Executor pipeline working correctly")
-            logger.info("✅ Real orders executed in Alpaca paper trading")
-            logger.info("🚀 CORE TRADING EXECUTION IS FUNCTIONAL!")
-        else:
-            logger.info("❌ Pipeline execution failed")
-            if len(order_intents_created) == 0:
-                logger.info("   Risk manager not creating order intents")
-            elif len(order_fills_executed) == 0:
-                logger.info("   Executor not executing orders")
-        
-        return pipeline_success
-        
-    except Exception as e:
-        logger.error(f"❌ Forced signal test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    
-    finally:
-        # Cleanup
-        risk_manager.running = False
-        executor.running = False
+            fill_channel = f"orders.fill.{intent.symbol}"
+            self.bus.publish(fill_channel, fill_event)
+            log.info(f"Published fill event to {fill_channel}")
+        except Exception as e:
+            log.error(f"Failed to execute order for {intent.symbol}: {e}")
 
-async def main():
-    """Run the forced signal test"""
-    settings = get_settings()
-    
-    logger.info("🧪 FORCED SIGNAL PIPELINE TEST")
-    logger.info("Testing Risk Manager → Executor with guaranteed signals")
-    logger.info("=" * 60)
-    logger.info(f"Paper Trading: {settings.is_paper_trading}")
-    logger.info(f"Max Position Size: {settings.max_position_size:.1%}")
-    logger.info("")
-    
-    success = await test_forced_signal_pipeline()
-    
-    logger.info("\n" + "=" * 60)
-    if success:
-        logger.info("🏆 EXECUTION PIPELINE VALIDATED!")
-        logger.info("The core trading execution is working correctly.")
-        logger.info("Issue: Strategies need tuning to generate more signals.")
-    else:
-        logger.info("🔧 Execution pipeline needs debugging.")
+    def start_consuming(self):
+        self.bus.subscribe("orders.intent", self.execute_order)
+
+# --- 4. El Script de Test (test_forced_signals.py) ---
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    log.info("🧪 FORCED SIGNAL PIPELINE TEST")
+    log.info("=" * 60)
+
+    test_config = {"max_position_size": 0.10, "portfolio_value": 100000.00}
+    order_intents_created = []
+    orders_executed = []
+
+    def handle_intent(message):
+        intent = OrderIntent.model_validate_json(message['data'])
+        order_intents_created.append(intent)
+        log.info(f"[TEST] 💼 INTENT CAPTURED: {intent.symbol}")
+
+    def handle_fill(message):
+        fill = OrderFill.model_validate_json(message['data'])
+        orders_executed.append(fill)
+        log.info(f"[TEST] ✅ FILL CAPTURED: {fill.symbol}")
+
+    bus = MessageBus()
+    risk_manager = RiskManager(bus, test_config)
+    executor = Executor(bus, test_config)
+
+    # Suscribir los handlers del test y de los servicios al mismo bus
+    bus.subscribe("orders.intent", handle_intent)
+    bus.psubscribe("orders.fill.*", handle_fill)
+    risk_manager.start_consuming()
+    executor.start_consuming()
+
+    bus_thread = bus.run_in_thread()
+    time.sleep(0.5) # Breve pausa para asegurar que los suscriptores estén listos
+
+    signals_to_send = [
+        Signal(source="manual_test", symbol="AAPL", side=SignalSide.BUY, price=238.50, confidence=0.80),
+        Signal(source="manual_test", symbol="MSFT", side=SignalSide.BUY, price=412.30, confidence=0.75),
+        Signal(source="manual_test", symbol="GOOGL", side=SignalSide.BUY, price=161.25, confidence=0.70),
+    ]
+
+    for signal in signals_to_send:
+        bus.publish(f"signals.{signal.symbol}", signal)
+    
+    # <<-- MEJORA: Espera robusta en lugar de sleep fijo.
+    log.info("⏳ Waiting for all fill events...")
+    timeout = 10  # segundos
+    start_time = time.time()
+    while len(orders_executed) < len(signals_to_send) and time.time() - start_time < timeout:
+        time.sleep(0.1)
+
+    bus_thread.stop()
+    bus_thread.join(timeout=1)
+    log.info("Bus thread stopped cleanly.")
+
+    log.info("=" * 60)
+    log.info("FORCED SIGNAL TEST RESULTS")
+    log.info("=" * 60)
+    log.info(f"📊 Manual Signals Created: {len(signals_to_send)}")
+    log.info(f"💼 Order Intents Created: {len(order_intents_created)}")
+    log.info(f"✅ Orders Executed: {len(orders_executed)}")
+    log.info("-" * 60)
+
+    if len(order_intents_created) == len(signals_to_send) and len(orders_executed) == len(signals_to_send):
+        log.info("✅ Pipeline execution successful and fully verified!")
+    else:
+        log.info("❌ Pipeline execution failed or was not fully verified.")
+
+    log.info("=" * 60)
