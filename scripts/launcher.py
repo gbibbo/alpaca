@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Trading Platform Launcher
-Orchestrates multiple microservices according to ChatGPT architecture
+Trading Platform Launcher - Fixed version
+Orchestrates multiple microservices with fallback support
 """
 
 import os
@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Dict, List
 import yaml
 
+# Add lib to Python path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from lib.settings import get_settings
+from lib.bus import connect_bus
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -23,13 +29,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class ServiceManager:
-    """Manages multiple trading microservices"""
+    """Manages multiple trading microservices with improved dependency checking"""
     
     def __init__(self, config_path: str = "configs/base.yaml"):
         self.config_path = config_path
         self.config = self.load_config()
         self.processes: Dict[str, subprocess.Popen] = {}
         self.running = False
+        self.settings = get_settings()
         
         # Service definitions
         self.services = {
@@ -68,47 +75,82 @@ class ServiceManager:
     def load_config(self) -> dict:
         """Load system configuration"""
         try:
-            with open(self.config_path, 'r') as f:
-                return yaml.safe_load(f)
+            if os.path.exists(self.config_path):
+                with open(self.config_path, 'r') as f:
+                    return yaml.safe_load(f)
+            else:
+                logger.warning(f"Config file {self.config_path} not found, using defaults")
+                return {}
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
             return {}
     
     def check_dependencies(self) -> bool:
-        """Check if Redis and other dependencies are available"""
+        """Check if dependencies are available with fallback support"""
         logger.info("Checking dependencies...")
         
-        # Check Redis
+        all_good = True
+        
+        # Check message bus (Redis or fakeredis)
         try:
-            import redis
-            r = redis.Redis(host='localhost', port=6379, socket_timeout=5)
-            r.ping()
-            logger.info("✅ Redis connection OK")
+            if connect_bus():
+                logger.info("✅ Message bus connection OK (using fakeredis fallback)")
+            else:
+                logger.error("❌ Message bus connection failed")
+                return False
         except Exception as e:
-            logger.error(f"❌ Redis not available: {e}")
-            logger.error("Please start Redis with: docker-compose up redis")
+            logger.error(f"❌ Message bus error: {e}")
             return False
         
         # Check Python packages
-        required_packages = ['pandas', 'alpaca', 'fastapi', 'pydantic']
-        for package in required_packages:
-            try:
-                __import__(package.replace('-', '_'))
-                logger.info(f"✅ {package} package OK")
-            except ImportError:
-                logger.error(f"❌ Missing package: {package}")
-                logger.error("Please install with: pip install -r requirements.txt")
-                return False
+        required_packages = [
+            ('pandas', 'pandas'),
+            ('alpaca', 'alpaca'),
+            ('fastapi', 'fastapi'),
+            ('pydantic', 'pydantic'),
+            ('redis', 'redis'),
+            ('fakeredis', 'fakeredis')
+        ]
         
-        # Check .env file
+        for package_name, import_name in required_packages:
+            try:
+                __import__(import_name.replace('-', '_'))
+                logger.info(f"✅ {package_name} package OK")
+            except ImportError:
+                logger.error(f"❌ Missing package: {package_name}")
+                logger.error("Please install with: pip install -r requirements.txt")
+                all_good = False
+        
+        # Check .env file and Alpaca credentials
         if not os.path.exists('.env'):
             logger.error("❌ Missing .env file with Alpaca credentials")
             logger.error("Please create .env with your Alpaca API keys")
-            return False
+            all_good = False
         else:
             logger.info("✅ .env file found")
+            
+            # Check if credentials are configured
+            if self.settings.has_alpaca_credentials:
+                logger.info("✅ Alpaca credentials configured")
+                
+                # Test Alpaca connection
+                try:
+                    from alpaca.trading.client import TradingClient
+                    client = TradingClient(
+                        api_key=self.settings.apca_api_key_id,
+                        secret_key=self.settings.apca_api_secret_key,
+                        paper=self.settings.is_paper_trading
+                    )
+                    account = client.get_account()
+                    logger.info(f"✅ Alpaca connection OK - Account: {account.status}")
+                except Exception as e:
+                    logger.error(f"❌ Alpaca connection failed: {e}")
+                    all_good = False
+            else:
+                logger.error("❌ Alpaca credentials not configured in .env")
+                all_good = False
         
-        return True
+        return all_good
     
     def start_service(self, service_name: str) -> bool:
         """Start a single service"""
@@ -257,7 +299,10 @@ class ServiceManager:
             logger.info("🌐 API available at: http://localhost:8000")
             logger.info("📊 API docs at: http://localhost:8000/docs")
         
-        logger.info("🔍 Redis GUI at: http://localhost:8081 (if running)")
+        # Show configuration summary
+        logger.info(f"📈 Symbols: {self.settings.symbols_list}")
+        logger.info(f"🔒 Paper Trading: {self.settings.is_paper_trading}")
+        logger.info(f"📡 Message Bus: fakeredis (no external Redis needed)")
 
 def main():
     """Main entry point"""

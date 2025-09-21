@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Data Ingestor - Alpaca Market Data to Redis Bus
-Downloads historical and live data, publishes to message bus
+Data Ingestor - Alpaca Market Data to Redis Bus (Fixed Version)
+Downloads historical and live data, publishes to message bus with unified configuration
 """
 
 import os
@@ -10,18 +10,17 @@ import logging
 from datetime import datetime, timedelta
 from typing import List
 import sys
+from pathlib import Path
 
 # Add lib to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from lib.models import Bar, TimeFrame
 from lib.bus import get_bus, connect_bus
+from lib.settings import get_settings
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame as AlpacaTimeFrame
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -31,34 +30,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class AlpacaDataIngestor:
-    """Ingests market data from Alpaca and publishes to Redis bus"""
+    """Ingests market data from Alpaca and publishes to Redis bus with unified configuration"""
     
-    def __init__(self, symbols: List[str]):
-        self.symbols = symbols
+    def __init__(self):
+        # Load settings
+        self.settings = get_settings()
+        self.symbols = self.settings.symbols_list
         self.data_client = None
         self.bus = get_bus()
         self.running = False
         
         # Initialize Alpaca client
-        api_key = os.getenv('APCA_API_KEY_ID')
-        secret_key = os.getenv('APCA_API_SECRET_KEY')
-        
-        if not api_key or not secret_key:
-            raise ValueError("Missing Alpaca API credentials")
+        if not self.settings.has_alpaca_credentials:
+            raise ValueError("Missing Alpaca API credentials in configuration")
         
         self.data_client = StockHistoricalDataClient(
-            api_key=api_key,
-            secret_key=secret_key
+            api_key=self.settings.apca_api_key_id,
+            secret_key=self.settings.apca_api_secret_key
         )
         
-        logger.info(f"Initialized data ingestor for symbols: {symbols}")
+        logger.info(f"Initialized data ingestor for symbols: {self.symbols}")
+        logger.info(f"Historical days: {self.settings.historical_days}")
+        logger.info(f"Paper trading mode: {self.settings.is_paper_trading}")
     
-    async def ingest_historical_data(self, days_back: int = 30):
+    async def ingest_historical_data(self, days_back: int = None):
         """Download and publish historical data"""
+        if days_back is None:
+            days_back = self.settings.historical_days
+            
         logger.info(f"Ingesting {days_back} days of historical data...")
         
         end_time = datetime.now() - timedelta(days=1)  # Yesterday
         start_time = end_time - timedelta(days=days_back)
+        
+        total_bars_published = 0
         
         for symbol in self.symbols:
             try:
@@ -78,6 +83,7 @@ class AlpacaDataIngestor:
                     df = bars_response.df.reset_index()
                     
                     # Convert to Bar objects and publish
+                    bars_count = 0
                     for _, row in df.iterrows():
                         bar = Bar(
                             symbol=symbol,
@@ -92,24 +98,44 @@ class AlpacaDataIngestor:
                         
                         # Publish to bus
                         self.bus.publish_bar(bar)
+                        bars_count += 1
+                        total_bars_published += 1
                     
-                    logger.info(f"Published {len(df)} bars for {symbol}")
+                    logger.info(f"Published {bars_count} historical bars for {symbol}")
                 else:
                     logger.warning(f"No historical data for {symbol}")
                     
             except Exception as e:
-                logger.error(f"Error downloading data for {symbol}: {e}")
+                logger.error(f"Error downloading historical data for {symbol}: {e}")
                 continue
+        
+        logger.info(f"Historical data ingestion complete: {total_bars_published} total bars published")
+        
+        # Publish system event
+        self.bus.publish_system_event(
+            event_type="historical_data_complete",
+            source="data_ingestor",
+            data={
+                "symbols": self.symbols,
+                "days_back": days_back,
+                "total_bars": total_bars_published
+            }
+        )
     
     async def ingest_live_data(self):
         """Simulate live data ingestion (1-minute updates)"""
         logger.info("Starting live data ingestion...")
         
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
         while self.running:
             try:
-                # Get latest bars (last 2 minutes to ensure we get recent data)
+                # Get latest bars (last 5 minutes to ensure we get recent data)
                 end_time = datetime.now()
                 start_time = end_time - timedelta(minutes=5)
+                
+                bars_published = 0
                 
                 for symbol in self.symbols:
                     try:
@@ -141,33 +167,49 @@ class AlpacaDataIngestor:
                             
                             # Publish latest bar
                             self.bus.publish_bar(bar)
+                            bars_published += 1
                             logger.debug(f"Published live bar for {symbol}: ${bar.close}")
                             
                     except Exception as e:
                         logger.error(f"Error getting live data for {symbol}: {e}")
                         continue
                 
+                if bars_published > 0:
+                    logger.info(f"Published {bars_published} live bars")
+                    consecutive_errors = 0  # Reset error counter on success
+                
                 # Wait 60 seconds for next minute
                 await asyncio.sleep(60)
                 
             except Exception as e:
-                logger.error(f"Error in live data loop: {e}")
-                await asyncio.sleep(10)
+                consecutive_errors += 1
+                logger.error(f"Error in live data loop (#{consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping live data ingestion")
+                    break
+                
+                # Back off exponentially on errors
+                await asyncio.sleep(min(60, 10 * consecutive_errors))
     
-    async def start(self, historical_days: int = 7):
+    async def start(self, historical_days: int = None):
         """Start the data ingestor"""
         logger.info("Starting Alpaca Data Ingestor...")
         
         # Connect to message bus
         if not connect_bus():
-            logger.error("Failed to connect to Redis")
+            logger.error("Failed to connect to message bus")
             return False
         
         # Publish system start event
         self.bus.publish_system_event(
             event_type="service_start",
             source="data_ingestor",
-            data={"symbols": self.symbols, "historical_days": historical_days}
+            data={
+                "symbols": self.symbols,
+                "historical_days": historical_days or self.settings.historical_days,
+                "paper_trading": self.settings.is_paper_trading
+            }
         )
         
         self.running = True
@@ -183,6 +225,13 @@ class AlpacaDataIngestor:
             logger.info("Received shutdown signal")
         except Exception as e:
             logger.error(f"Fatal error: {e}")
+            
+            # Publish error event
+            self.bus.publish_system_event(
+                event_type="service_error",
+                source="data_ingestor",
+                data={"error": str(e)}
+            )
         finally:
             await self.stop()
     
@@ -202,18 +251,20 @@ class AlpacaDataIngestor:
 
 async def main():
     """Main entry point"""
-    # Default symbols - can be configured via environment
-    symbols = os.getenv('SYMBOLS', 'AAPL,MSFT,GOOGL,TSLA,NVDA').split(',')
-    historical_days = int(os.getenv('HISTORICAL_DAYS', '7'))
-    
-    ingestor = AlpacaDataIngestor(symbols)
-    
     try:
-        await ingestor.start(historical_days)
+        # Get settings
+        settings = get_settings()
+        
+        # Create and start ingestor
+        ingestor = AlpacaDataIngestor()
+        await ingestor.start()
+        
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
     except Exception as e:
         logger.error(f"Unhandled error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     asyncio.run(main())

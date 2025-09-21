@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Risk Manager - Validates and filters trading signals
-Applies position sizing, risk limits, and portfolio constraints
+Risk Manager - Fixed version with unified configuration
+Validates and filters trading signals, applies position sizing and risk limits
 """
 
 import os
@@ -12,15 +12,14 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from collections import defaultdict
 import uuid
+from pathlib import Path
 
 # Add lib to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from lib.models import Signal, OrderIntent, PortfolioState, Position, SignalSide, OrderType, RiskConfig
 from lib.bus import get_bus, connect_bus
-from dotenv import load_dotenv
-
-load_dotenv()
+from lib.settings import get_settings
 
 # Configure logging
 logging.basicConfig(
@@ -30,22 +29,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class RiskManager:
-    """Risk management service for trading signals"""
+    """Risk management service for trading signals with unified configuration"""
     
     def __init__(self):
+        self.settings = get_settings()
         self.bus = get_bus()
         self.running = False
         
-        # Risk configuration
+        # Risk configuration from settings
         self.config = RiskConfig(
-            max_daily_loss=float(os.getenv('MAX_DAILY_LOSS', '0.05')),  # 5%
-            max_portfolio_risk=float(os.getenv('MAX_PORTFOLIO_RISK', '0.2')),  # 20%
-            max_position_size=float(os.getenv('MAX_POSITION_SIZE', '0.1')),  # 10%
-            stop_loss_pct=float(os.getenv('STOP_LOSS_PCT', '0.02')),  # 2%
-            take_profit_pct=float(os.getenv('TAKE_PROFIT_PCT', '0.06'))  # 6%
+            max_daily_loss=self.settings.max_daily_loss,
+            max_portfolio_risk=self.settings.max_portfolio_risk,
+            max_position_size=self.settings.max_position_size,
+            stop_loss_pct=self.settings.stop_loss_pct,
+            take_profit_pct=self.settings.take_profit_pct
         )
         
-        # Track portfolio state
+        # Track portfolio state (simplified for demo)
         self.portfolio = PortfolioState(
             total_value=100000.0,  # Starting value
             cash=100000.0,
@@ -62,7 +62,13 @@ class RiskManager:
         self.recent_signals: Dict[str, datetime] = {}
         self.signal_cooldown = timedelta(minutes=5)  # 5-minute cooldown per symbol
         
-        logger.info(f"Initialized Risk Manager with config: {self.config}")
+        # Track processed signals to avoid duplicates
+        self.processed_signals = set()
+        
+        logger.info(f"Initialized Risk Manager with config:")
+        logger.info(f"  Max daily loss: {self.config.max_daily_loss:.1%}")
+        logger.info(f"  Max position size: {self.config.max_position_size:.1%}")
+        logger.info(f"  Portfolio value: ${self.portfolio.total_value:,.2f}")
     
     def reset_daily_metrics(self):
         """Reset daily tracking metrics"""
@@ -92,32 +98,36 @@ class RiskManager:
         daily_loss_limit = self.portfolio.total_value * self.config.max_daily_loss
         
         if self.daily_pnl < -daily_loss_limit:
-            logger.warning(f"Daily loss limit reached: {self.daily_pnl:.2f}")
+            logger.warning(f"Daily loss limit reached: ${self.daily_pnl:.2f}")
             return False
         
         return True
     
     def calculate_position_size(self, signal: Signal) -> float:
         """Calculate appropriate position size based on risk management"""
+        if not signal.price or signal.price <= 0:
+            return 0.0
+        
         # Base position size on risk per trade and portfolio value
         max_risk_amount = self.portfolio.total_value * self.config.max_position_size
         
-        if signal.price and signal.price > 0:
-            # Calculate shares based on dollar amount
-            base_quantity = max_risk_amount / signal.price
-            
-            # Adjust based on signal confidence
-            confidence_multiplier = min(1.0, signal.confidence * 2)  # Scale confidence
-            adjusted_quantity = base_quantity * confidence_multiplier
-            
-            # Ensure we don't exceed available cash for buy orders
-            if signal.side == SignalSide.BUY:
-                max_affordable = self.portfolio.cash / signal.price
-                adjusted_quantity = min(adjusted_quantity, max_affordable)
-            
-            return max(0, adjusted_quantity)
+        # Calculate shares based on dollar amount
+        base_quantity = max_risk_amount / signal.price
         
-        return 0
+        # Adjust based on signal confidence
+        confidence_multiplier = min(1.0, signal.confidence * 2)  # Scale confidence
+        adjusted_quantity = base_quantity * confidence_multiplier
+        
+        # Ensure we don't exceed available cash for buy orders
+        if signal.side == SignalSide.BUY:
+            max_affordable = self.portfolio.cash / signal.price
+            adjusted_quantity = min(adjusted_quantity, max_affordable)
+        
+        # Minimum quantity check
+        if adjusted_quantity < 1.0:
+            return 0.0
+        
+        return int(adjusted_quantity)  # Return whole shares
     
     def get_current_position(self, symbol: str) -> Optional[Position]:
         """Get current position for symbol"""
@@ -129,9 +139,14 @@ class RiskManager:
     def validate_signal(self, signal: Signal) -> tuple[bool, str]:
         """Validate signal against risk rules"""
         
+        # Check if already processed
+        signal_id = f"{signal.symbol}_{signal.side}_{signal.timestamp.isoformat()}_{signal.source}"
+        if signal_id in self.processed_signals:
+            return False, "Signal already processed"
+        
         # Check basic signal requirements
-        if signal.confidence < 0.3:
-            return False, f"Signal confidence too low: {signal.confidence}"
+        if signal.confidence < 0.5:
+            return False, f"Signal confidence too low: {signal.confidence:.1%}"
         
         # Check cooldown period
         if not self.check_signal_cooldown(signal):
@@ -147,21 +162,28 @@ class RiskManager:
         if signal.side == SignalSide.BUY:
             # Check if we already have a large position
             if current_position:
-                position_value = current_position.quantity * signal.price if signal.price else 0
+                position_value = current_position.quantity * (signal.price or 0)
                 position_pct = position_value / self.portfolio.total_value
                 
                 if position_pct > self.config.max_position_size:
-                    return False, f"Position size already too large: {position_pct:.2%}"
+                    return False, f"Position size already too large: {position_pct:.1%}"
             
             # Check available cash
-            required_cash = self.calculate_position_size(signal) * (signal.price or 0)
+            quantity = self.calculate_position_size(signal)
+            required_cash = quantity * (signal.price or 0)
             if required_cash > self.portfolio.cash:
                 return False, f"Insufficient cash: need ${required_cash:.2f}, have ${self.portfolio.cash:.2f}"
+            
+            if quantity == 0:
+                return False, "Calculated position size is zero"
         
         elif signal.side == SignalSide.SELL:
             # Check if we have position to sell
             if not current_position or current_position.quantity <= 0:
                 return False, "No position to sell"
+        
+        # Mark as processed
+        self.processed_signals.add(signal_id)
         
         return True, "Signal validated"
     
@@ -208,6 +230,9 @@ class RiskManager:
     async def process_signal(self, signal: Signal):
         """Process incoming signal and apply risk management"""
         try:
+            logger.info(f"Processing signal: {signal.side} {signal.symbol} "
+                       f"(confidence: {signal.confidence:.1%}) from {signal.source}")
+            
             # Validate signal
             is_valid, reason = self.validate_signal(signal)
             
@@ -235,7 +260,7 @@ class RiskManager:
             self.bus.publish_order_intent(order_intent)
             
             logger.info(
-                f"Created order intent: {order_intent.side} {order_intent.quantity:.2f} "
+                f"Created order intent: {order_intent.side} {order_intent.quantity:.0f} "
                 f"{order_intent.symbol} @ ${order_intent.price:.2f}"
             )
             
@@ -254,10 +279,15 @@ class RiskManager:
             
         except Exception as e:
             logger.error(f"Error processing signal for {signal.symbol}: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def consume_signals(self):
         """Consume signals from message bus"""
         logger.info("Starting to consume signals...")
+        
+        signals_processed = 0
+        orders_created = 0
         
         async for signal in self.bus.subscribe_signals():
             if not self.running:
@@ -269,6 +299,11 @@ class RiskManager:
                 
                 # Process signal
                 await self.process_signal(signal)
+                signals_processed += 1
+                
+                # Log progress
+                if signals_processed % 10 == 0:
+                    logger.info(f"Processed {signals_processed} signals, created {orders_created} orders")
                 
             except Exception as e:
                 logger.error(f"Error consuming signal: {e}")
@@ -279,7 +314,7 @@ class RiskManager:
         
         # Connect to message bus
         if not connect_bus():
-            logger.error("Failed to connect to Redis")
+            logger.error("Failed to connect to message bus")
             return False
         
         # Publish service start event
@@ -288,7 +323,8 @@ class RiskManager:
             source="risk_manager",
             data={
                 "config": self.config.model_dump(),
-                "portfolio_value": self.portfolio.total_value
+                "portfolio_value": self.portfolio.total_value,
+                "symbols": self.settings.symbols_list
             }
         )
         
@@ -302,6 +338,13 @@ class RiskManager:
             logger.info("Received shutdown signal")
         except Exception as e:
             logger.error(f"Fatal error: {e}")
+            
+            # Publish error event
+            self.bus.publish_system_event(
+                event_type="service_error",
+                source="risk_manager",
+                data={"error": str(e)}
+            )
         finally:
             await self.stop()
     
@@ -321,14 +364,16 @@ class RiskManager:
 
 async def main():
     """Main entry point"""
-    risk_manager = RiskManager()
-    
     try:
+        risk_manager = RiskManager()
         await risk_manager.start()
+        
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
     except Exception as e:
         logger.error(f"Unhandled error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     asyncio.run(main())
