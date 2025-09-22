@@ -3,11 +3,13 @@
 lib/settings.py
 Unified Settings Configuration
 Single source of truth for all environment variables and configuration
+Enhanced with timezone support
 """
 
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 from pydantic import Field
+import pytz
 
 class Settings(BaseSettings):
     """Application settings from environment variables"""
@@ -32,6 +34,11 @@ class Settings(BaseSettings):
     take_profit_pct: float = 0.06  # 6%
     risk_pct: float = 0.02  # Risk per trade
     
+    # Enhanced Rate Limiting (using monotonic time)
+    max_orders_per_minute: int = 10
+    max_signals_per_5min: int = 50
+    max_api_calls_per_minute: int = 200  # Alpaca limit
+    
     # Redis/Message Bus Configuration
     redis_url: str = "redis://localhost:6379/0"
     use_fake_redis: bool = False
@@ -44,6 +51,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     enable_live_trading: bool = False
     paper_trading: bool = True
+    
+    # Timezone Configuration (new)
+    market_timezone: str = "US/Eastern"
+    system_timezone: str = "UTC"
     
     # Service Configuration
     data_ingestor_enabled: bool = True
@@ -61,6 +72,12 @@ class Settings(BaseSettings):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Validate timezone
+        try:
+            pytz.timezone(self.market_timezone)
+            pytz.timezone(self.system_timezone)
+        except pytz.exceptions.UnknownTimeZoneError as e:
+            raise ValueError(f"Invalid timezone configuration: {e}")
     
     @property
     def symbols_list(self) -> List[str]:
@@ -78,6 +95,16 @@ class Settings(BaseSettings):
     def has_alpaca_credentials(self) -> bool:
         """Check if Alpaca credentials are configured"""
         return bool(self.apca_api_key_id and self.apca_api_secret_key)
+    
+    @property
+    def market_tz(self) -> pytz.BaseTzInfo:
+        """Get market timezone object"""
+        return pytz.timezone(self.market_timezone)
+    
+    @property
+    def system_tz(self) -> pytz.BaseTzInfo:
+        """Get system timezone object"""  
+        return pytz.timezone(self.system_timezone)
 
 # -------------------------------------------------------------------
 # --> ESTA ES LA LÍNEA CRÍTICA QUE PROBABLEMENTE FALTABA <--

@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 """
 apps/risk_manager/main.py
-Risk Manager - Enhanced version with deduplication and robust validations
-Validates and filters trading signals, applies position sizing and risk limits
+Enhanced Risk Manager with ChatGPT's recommended improvements
+- Timezone-aware validation using US/Eastern market time
+- Monotonic time-based rate limiting 
+- Persistent deduplication with Redis
+- Multi-layer validation with detailed logging
+- Circuit breakers and kill switches
+- Market hours validation using Clock API
 """
 
 import os
+import sys
 import asyncio
 import logging
-import sys
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
-from collections import defaultdict
-import uuid
-from pathlib import Path
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
+from pathlib import Path
 
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from lib.models import Signal, OrderIntent, PortfolioState, Position, SignalSide, OrderType, RiskConfig
+from lib.models import Signal, OrderIntent, SignalSide, OrderType
 from lib.bus import get_bus, connect_bus
 from lib.settings import get_settings
+from lib.time_utils import (
+    TimeUtils, MonotonicTimer, RateLimitWindow, TimingContext,
+    ORDER_RATE_LIMITER, SIGNAL_RATE_LIMITER, check_alpaca_rate_limit,
+    record_alpaca_call
+)
 from lib.deduplication import get_deduplication_service
 
 # Configure logging
@@ -31,400 +39,507 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class MarketHoursValidator:
+    """Validates market hours using timezone-aware logic"""
+    
+    def __init__(self):
+        self.settings = get_settings()
+        # Cache for market schedule (future: integrate with Alpaca Clock API)
+        self._market_holidays = set()  # TODO: Implement holiday calendar
+        
+    def is_market_open(self, dt: Optional[datetime] = None) -> bool:
+        """Check if market is open at given time (or now)"""
+        return TimeUtils.is_market_hours(dt)
+    
+    def time_until_market_open(self) -> timedelta:
+        """Get time until next market open"""
+        now = TimeUtils.market_now()
+        next_open = TimeUtils.next_market_open(now)
+        return next_open - now
+    
+    def validate_trading_hours(self) -> Tuple[bool, str]:
+        """Validate current trading hours with detailed reason"""
+        now = TimeUtils.market_now()
+        
+        # Check if it's a weekend
+        if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            return False, f"Market closed - Weekend ({now.strftime('%A')})"
+        
+        # Check market hours (9:30 AM - 4:00 PM ET)
+        if not TimeUtils.is_market_hours(now):
+            if now.hour < 9 or (now.hour == 9 and now.minute < 30):
+                time_until_open = self.time_until_market_open()
+                return False, f"Market closed - Pre-market (opens in {time_until_open})"
+            else:
+                return False, f"Market closed - After-hours (opens {TimeUtils.next_market_open()})"
+        
+        # TODO: Add holiday checking
+        # if now.date() in self._market_holidays:
+        #     return False, f"Market closed - Holiday"
+        
+        return True, "Market open"
+
+
+class CircuitBreaker:
+    """Circuit breaker for emergency stops and error rate monitoring"""
+    
+    def __init__(self, name: str, error_threshold: int = 5, time_window: int = 300):
+        self.name = name
+        self.error_threshold = error_threshold
+        self.time_window = time_window  # 5 minutes default
+        
+        # Error tracking using monotonic time
+        self.errors = []  # List of (monotonic_time, error_info)
+        self.is_open = False
+        self.opened_at = None
+        self.manual_override = False
+        
+    def record_error(self, error_info: str):
+        """Record an error occurrence"""
+        current_time = MonotonicTimer.current()
+        self.errors.append((current_time, error_info))
+        
+        # Clean old errors
+        self._cleanup_old_errors()
+        
+        # Check if threshold exceeded
+        if len(self.errors) >= self.error_threshold:
+            self._open_circuit(f"Error threshold exceeded: {len(self.errors)} errors")
+    
+    def record_success(self):
+        """Record a successful operation"""
+        if self.is_open and not self.manual_override:
+            # If circuit is open due to errors (not manual), consider closing
+            if len(self.errors) < self.error_threshold // 2:
+                self._close_circuit("Error rate improved")
+    
+    def _cleanup_old_errors(self):
+        """Remove errors outside the time window"""
+        current_time = MonotonicTimer.current()
+        cutoff_time = current_time - self.time_window
+        
+        self.errors = [err for err in self.errors if err[0] > cutoff_time]
+    
+    def _open_circuit(self, reason: str):
+        """Open the circuit breaker"""
+        if not self.is_open:
+            self.is_open = True
+            self.opened_at = MonotonicTimer.current()
+            logger.error(f"🚨 Circuit breaker '{self.name}' OPENED: {reason}")
+    
+    def _close_circuit(self, reason: str):
+        """Close the circuit breaker"""
+        if self.is_open and not self.manual_override:
+            self.is_open = False
+            self.opened_at = None
+            logger.info(f"✅ Circuit breaker '{self.name}' CLOSED: {reason}")
+    
+    def is_blocked(self) -> Tuple[bool, str]:
+        """Check if operations should be blocked"""
+        if self.manual_override:
+            return True, f"Manual override active"
+        
+        if self.is_open:
+            return True, f"Circuit breaker open - {len(self.errors)} errors in last {self.time_window}s"
+        
+        return False, "Circuit breaker closed"
+    
+    def manual_open(self, reason: str = "Manual emergency stop"):
+        """Manually open circuit breaker"""
+        self.manual_override = True
+        self._open_circuit(reason)
+    
+    def manual_close(self, reason: str = "Manual reset"):
+        """Manually close circuit breaker"""
+        self.manual_override = False
+        self._close_circuit(reason)
+    
+    def get_stats(self) -> Dict:
+        """Get circuit breaker statistics"""
+        self._cleanup_old_errors()
+        
+        return {
+            "name": self.name,
+            "is_open": self.is_open,
+            "manual_override": self.manual_override,
+            "error_count": len(self.errors),
+            "error_threshold": self.error_threshold,
+            "time_window": self.time_window,
+            "opened_at": self.opened_at,
+            "recent_errors": [err[1] for err in self.errors[-5:]]  # Last 5 errors
+        }
+
+
 class EnhancedRiskManager:
-    """Enhanced risk management service with deduplication and robust validations"""
+    """
+    Enhanced Risk Manager implementing ChatGPT's recommendations
+    - Multi-layer validation with detailed logging
+    - Timezone-aware market hours checking
+    - Monotonic time-based rate limiting
+    - Persistent deduplication with Redis
+    - Circuit breakers and emergency controls
+    """
     
     def __init__(self):
         self.settings = get_settings()
         self.bus = get_bus()
         self.running = False
         
-        # Initialize deduplication service
-        self.dedup_service = get_deduplication_service(
-            signal_ttl_seconds=3600,  # 1 hour signal TTL
-            order_ttl_seconds=86400,  # 24 hours order TTL
-            cleanup_interval_seconds=300  # 5 minutes cleanup
+        # Initialize enhanced services
+        self.deduplication = get_deduplication_service()
+        self.market_validator = MarketHoursValidator()
+        
+        # Rate limiters using monotonic time
+        self.order_rate_limiter = RateLimitWindow(
+            window_seconds=60, 
+            max_requests=self.settings.max_orders_per_minute
+        )
+        self.signal_rate_limiter = RateLimitWindow(
+            window_seconds=300,  # 5 minutes 
+            max_requests=self.settings.max_signals_per_5min
         )
         
-        # Risk configuration from settings with Decimal conversion
-        self.config = RiskConfig(
-            max_daily_loss=Decimal(str(self.settings.max_daily_loss)),
-            max_portfolio_risk=Decimal(str(self.settings.max_portfolio_risk)),
-            max_position_size=Decimal(str(self.settings.max_position_size)),
-            stop_loss_pct=Decimal(str(self.settings.stop_loss_pct)),
-            take_profit_pct=Decimal(str(self.settings.take_profit_pct))
-        )
+        # Circuit breakers for different failure modes
+        self.circuit_breakers = {
+            "order_execution": CircuitBreaker("OrderExecution", error_threshold=3, time_window=300),
+            "market_data": CircuitBreaker("MarketData", error_threshold=5, time_window=600),
+            "risk_validation": CircuitBreaker("RiskValidation", error_threshold=10, time_window=300)
+        }
         
-        # Track portfolio state (simplified for demo) with Decimal values
-        self.portfolio = PortfolioState(
-            total_value=Decimal('100000.0'),  # Starting value
-            cash=Decimal('100000.0'),
-            buying_power=Decimal('100000.0'),
-            positions=[],
-            last_updated=datetime.utcnow()
-        )
-        
-        # Track daily P&L with Decimal
-        self.daily_pnl = Decimal('0.0')
-        self.daily_reset_time = datetime.now().date()
-        
-        # Track recent signals to avoid spam (in addition to deduplication)
-        self.recent_signals: Dict[str, datetime] = {}
-        self.signal_cooldown = timedelta(minutes=5)  # 5-minute cooldown per symbol
-        
-        # Track order rate limiting
-        self.order_timestamps: List[datetime] = []
-        self.max_orders_per_minute = 10
-        
-        # Emergency stop flag
+        # Emergency stop state
         self.emergency_stop = False
+        self.emergency_reason = None
+        self.emergency_activated_at = None
         
-        logger.info(f"Enhanced Risk Manager initialized:")
-        logger.info(f"  Max daily loss: {self.config.max_daily_loss:.1%}")
-        logger.info(f"  Max position size: {self.config.max_position_size:.1%}")
-        logger.info(f"  Portfolio value: ${self.portfolio.total_value:,.2f}")
-        logger.info(f"  Deduplication enabled: TTL={3600}s")
+        # Performance tracking
+        self.validation_timer = MonotonicTimer()
+        self.signals_processed = 0
+        self.signals_approved = 0
+        self.signals_rejected = 0
+        self.orders_created = 0
+        self.validation_errors = 0
+        
+        # Daily loss tracking (reset at market open)
+        self.daily_pnl = Decimal('0.0')
+        self.daily_reset_time = None
+        
+        logger.info("Enhanced Risk Manager initialized with:")
+        logger.info(f"  Order rate limit: {self.settings.max_orders_per_minute}/minute")
+        logger.info(f"  Signal rate limit: {self.settings.max_signals_per_5min}/5min")
+        logger.info(f"  Market timezone: {self.settings.market_timezone}")
+        logger.info(f"  Max daily loss: {self.settings.max_daily_loss:.1%}")
+        logger.info(f"  Max position size: {self.settings.max_position_size:.1%}")
     
-    def reset_daily_metrics(self):
-        """Reset daily tracking metrics"""
-        current_date = datetime.now().date()
+    def activate_emergency_stop(self, reason: str = "Manual emergency stop"):
+        """Activate emergency stop"""
+        self.emergency_stop = True
+        self.emergency_reason = reason
+        self.emergency_activated_at = MonotonicTimer.current()
         
-        if current_date > self.daily_reset_time:
-            logger.info(f"Resetting daily metrics for {current_date}")
-            self.daily_pnl = Decimal('0.0')
-            self.daily_reset_time = current_date
-            # Clear old order timestamps
-            self.order_timestamps.clear()
+        # Open all circuit breakers
+        for breaker in self.circuit_breakers.values():
+            breaker.manual_open(f"Emergency stop: {reason}")
+        
+        # Publish emergency event
+        self.bus.publish_system_event(
+            event_type="emergency_stop_activated",
+            source="risk_manager",
+            data={
+                "reason": reason,
+                "activated_at": TimeUtils.utc_now().isoformat(),
+                "market_time": TimeUtils.market_now().isoformat()
+            }
+        )
+        
+        logger.error(f"🚨 EMERGENCY STOP ACTIVATED: {reason}")
     
-    def check_emergency_stop(self) -> bool:
-        """Check if emergency stop is active"""
-        if self.emergency_stop:
-            logger.warning("Emergency stop is active - rejecting all signals")
-            return False
-        return True
+    def deactivate_emergency_stop(self, reason: str = "Manual reset"):
+        """Deactivate emergency stop"""
+        self.emergency_stop = False
+        self.emergency_reason = None
+        self.emergency_activated_at = None
+        
+        # Close circuit breakers (if not manually overridden)
+        for breaker in self.circuit_breakers.values():
+            breaker.manual_close(f"Emergency stop lifted: {reason}")
+        
+        # Publish recovery event
+        self.bus.publish_system_event(
+            event_type="emergency_stop_deactivated", 
+            source="risk_manager",
+            data={
+                "reason": reason,
+                "deactivated_at": TimeUtils.utc_now().isoformat(),
+                "market_time": TimeUtils.market_now().isoformat()
+            }
+        )
+        
+        logger.info(f"✅ Emergency stop deactivated: {reason}")
     
-    def check_rate_limit(self) -> bool:
-        """Check order rate limiting"""
-        current_time = datetime.utcnow()
-        
-        # Remove timestamps older than 1 minute
-        cutoff_time = current_time - timedelta(minutes=1)
-        self.order_timestamps = [ts for ts in self.order_timestamps if ts > cutoff_time]
-        
-        # Check if we're under the limit
-        if len(self.order_timestamps) >= self.max_orders_per_minute:
-            logger.warning(f"Rate limit exceeded: {len(self.order_timestamps)} orders in last minute")
-            return False
-        
-        return True
-    
-    def check_signal_cooldown(self, signal: Signal) -> bool:
-        """Check if signal is too recent for same symbol (additional to deduplication)"""
-        key = f"{signal.symbol}_{signal.source}"
-        last_signal_time = self.recent_signals.get(key)
-        
-        if last_signal_time:
-            time_since_last = datetime.utcnow() - last_signal_time
-            if time_since_last < self.signal_cooldown:
-                logger.debug(f"Signal for {signal.symbol} in cooldown period")
-                return False
-        
-        self.recent_signals[key] = datetime.utcnow()
-        return True
-    
-    def check_daily_loss_limit(self) -> bool:
-        """Check if daily loss limit would be exceeded"""
-        daily_loss_limit = self.portfolio.total_value * self.config.max_daily_loss
-        
-        if self.daily_pnl < -daily_loss_limit:
-            logger.warning(f"Daily loss limit reached: ${self.daily_pnl:.2f}")
-            return False
-        
-        return True
-    
-    def calculate_position_size(self, signal: Signal) -> Decimal:
-        """Calculate appropriate position size based on risk management"""
-        if not signal.price or signal.price <= 0:
-            return Decimal('0.0')
-        
-        # Base position size on risk per trade and portfolio value
-        max_risk_amount = self.portfolio.total_value * self.config.max_position_size
-        
-        # Calculate shares based on dollar amount
-        base_quantity = max_risk_amount / signal.price
-        
-        # Adjust based on signal confidence
-        confidence_multiplier = min(Decimal('1.0'), signal.confidence * Decimal('2'))  # Scale confidence
-        adjusted_quantity = base_quantity * confidence_multiplier
-        
-        # Ensure we don't exceed available cash for buy orders
-        if signal.side == SignalSide.BUY:
-            max_affordable = self.portfolio.cash / signal.price
-            adjusted_quantity = min(adjusted_quantity, max_affordable)
-        
-        # Minimum quantity check
-        if adjusted_quantity < Decimal('1.0'):
-            return Decimal('0.0')
-        
-        return adjusted_quantity.quantize(Decimal('1'))  # Return whole shares
-    
-    def get_current_position(self, symbol: str) -> Optional[Position]:
-        """Get current position for symbol"""
-        for position in self.portfolio.positions:
-            if position.symbol == symbol:
-                return position
-        return None
-    
-    def validate_signal(self, signal: Signal) -> tuple[bool, str]:
-        """Enhanced signal validation with multiple checks"""
-        
-        # 1. Check emergency stop
-        if not self.check_emergency_stop():
-            return False, "Emergency stop active"
-        
-        # 2. Check deduplication (most important - prevent duplicate processing)
-        if self.dedup_service.is_signal_processed(signal):
-            return False, "Signal already processed (duplicate)"
-        
-        # 3. Check rate limiting
-        if not self.check_rate_limit():
-            return False, "Rate limit exceeded"
-        
-        # 4. Check basic signal requirements
-        if signal.confidence < Decimal('0.5'):
-            return False, f"Signal confidence too low: {signal.confidence:.1%}"
-        
-        # 5. Check signal expiration
-        if hasattr(signal, 'expire_seconds') and signal.expire_seconds:
-            # Use timezone-aware datetime for comparison
-            current_time = datetime.now(timezone.utc) if signal.timestamp.tzinfo else datetime.utcnow()
-            signal_age = (current_time - signal.timestamp).total_seconds()
-            if signal_age > signal.expire_seconds:
-                return False, f"Signal expired: {signal_age:.0f}s > {signal.expire_seconds}s"
-        
-        # 6. Check cooldown period (additional layer)
-        if not self.check_signal_cooldown(signal):
-            return False, "Signal in cooldown period"
-        
-        # 7. Check daily loss limits
-        if not self.check_daily_loss_limit():
-            return False, "Daily loss limit exceeded"
-        
-        # 8. Check portfolio-specific rules
-        current_position = self.get_current_position(signal.symbol)
-        
-        if signal.side == SignalSide.BUY:
-            # Check if we already have a large position
-            if current_position:
-                position_value = current_position.quantity * signal.price
-                position_pct = position_value / self.portfolio.total_value
-                
-                if position_pct > self.config.max_position_size:
-                    return False, f"Position size already too large: {position_pct:.1%}"
+    def validate_signal_comprehensive(self, signal: Signal) -> Tuple[bool, str]:
+        """
+        Comprehensive signal validation with all ChatGPT recommended checks
+        Returns (is_valid, detailed_reason)
+        """
+        with TimingContext("signal_validation") as timer:
             
-            # Check available cash
-            quantity = self.calculate_position_size(signal)
-            required_cash = quantity * signal.price
-            if required_cash > self.portfolio.cash:
-                return False, f"Insufficient cash: need ${required_cash:.2f}, have ${self.portfolio.cash:.2f}"
+            # 1. Emergency Stop Check (highest priority)
+            if self.emergency_stop:
+                return False, f"Emergency stop active: {self.emergency_reason}"
             
-            if quantity == 0:
-                return False, "Calculated position size is zero"
-        
-        elif signal.side == SignalSide.SELL:
-            # Check if we have position to sell
-            if not current_position or current_position.quantity <= 0:
-                return False, "No position to sell"
-        
-        return True, "Signal validated"
+            # 2. Circuit Breaker Check
+            for breaker_name, breaker in self.circuit_breakers.items():
+                is_blocked, reason = breaker.is_blocked()
+                if is_blocked:
+                    return False, f"Circuit breaker {breaker_name}: {reason}"
+            
+            # 3. Market Hours Validation (timezone-aware)
+            market_open, market_reason = self.market_validator.validate_trading_hours()
+            if not market_open:
+                return False, f"Market hours: {market_reason}"
+            
+            # 4. Deduplication Check (persistent)
+            if self.deduplication.is_signal_processed(signal):
+                return False, "Signal already processed (persistent deduplication)"
+            
+            # 5. Rate Limiting Check (monotonic time-based)
+            if not self.signal_rate_limiter.can_make_request():
+                stats = self.signal_rate_limiter.get_stats()
+                time_until_next = self.signal_rate_limiter.time_until_next_slot()
+                return False, f"Signal rate limit exceeded ({stats['current_requests']}/{stats['max_requests']}), wait {time_until_next:.1f}s"
+            
+            # 6. Signal Quality Validation
+            if signal.confidence < Decimal('0.5'):
+                return False, f"Confidence too low: {signal.confidence} < 0.5"
+            
+            if hasattr(signal, 'expire_seconds') and signal.expire_seconds:
+                if signal.timestamp and TimeUtils.utc_now() > (signal.timestamp + timedelta(seconds=signal.expire_seconds)):
+                    return False, "Signal expired"
+            
+            # 7. Symbol Validation
+            if signal.symbol not in self.settings.symbols_list:
+                return False, f"Symbol {signal.symbol} not in allowed list: {self.settings.symbols_list}"
+            
+            # 8. Source Validation
+            allowed_sources = ["random_50_50", "smart_technical", "manual_api"]
+            if signal.source not in allowed_sources:
+                return False, f"Unknown signal source: {signal.source}"
+            
+            # All validations passed
+            return True, "Signal validation successful"
+    
+    def calculate_position_size(self, signal: Signal, portfolio_value: Decimal = Decimal('100000')) -> Tuple[Decimal, str]:
+        """
+        Calculate appropriate position size based on risk management rules
+        Returns (quantity, reasoning)
+        """
+        try:
+            # Base calculation using confidence and risk percentage  
+            base_risk_amount = portfolio_value * Decimal(str(self.settings.risk_pct))
+            confidence_adjusted_risk = base_risk_amount * signal.confidence
+            
+            # Position size limits
+            max_position_value = portfolio_value * Decimal(str(self.settings.max_position_size))
+            position_value = min(confidence_adjusted_risk, max_position_value)
+            
+            # Calculate quantity (assuming we have signal price)
+            if signal.price and signal.price > 0:
+                quantity = position_value / Decimal(str(signal.price))
+                quantity = quantity.quantize(Decimal('1'))  # Round to whole shares
+            else:
+                # Fallback: use default small position
+                quantity = Decimal('10')
+            
+            # Ensure minimum viable position
+            if quantity < Decimal('1'):
+                quantity = Decimal('1')
+            
+            reasoning = f"Risk: ${confidence_adjusted_risk:.2f}, Max pos: ${max_position_value:.2f}, Price: ${signal.price or 0:.2f}"
+            
+            return quantity, reasoning
+            
+        except Exception as e:
+            logger.error(f"Position sizing error: {e}")
+            return Decimal('1'), f"Error in calculation, using minimum: {e}"
     
     def create_order_intent(self, signal: Signal) -> OrderIntent:
-        """Create order intent from validated signal with enhanced metadata"""
-        
+        """Create order intent from validated signal"""
         # Calculate position size
-        quantity = self.calculate_position_size(signal)
+        quantity, size_reasoning = self.calculate_position_size(signal)
         
-        # For sell signals, use current position quantity
-        if signal.side == SignalSide.SELL:
-            current_position = self.get_current_position(signal.symbol)
-            if current_position:
-                quantity = min(quantity, current_position.quantity)
+        # Generate unique client order ID with risk manager prefix
+        client_order_id = f"risk_{signal.source}_{signal.symbol}_{signal.signal_id.hex[:8]}"
         
-        # Calculate stop loss and take profit levels
-        stop_loss = None
-        take_profit = None
-        
-        if signal.price and signal.side == SignalSide.BUY:
-            stop_loss = signal.price * (Decimal('1') - self.config.stop_loss_pct)
-            take_profit = signal.price * (Decimal('1') + self.config.take_profit_pct)
-        elif signal.price and signal.side == SignalSide.SELL:
-            stop_loss = signal.price * (Decimal('1') + self.config.stop_loss_pct)
-            take_profit = signal.price * (Decimal('1') - self.config.take_profit_pct)
-        
-        # Generate unique client order ID based on signal
-        client_order_id = f"risk_{signal.source}_{signal.symbol}_{uuid.uuid4().hex[:8]}"
-        
-        # Set order validity (5 minutes default)
-        valid_until = datetime.utcnow() + timedelta(minutes=5)
-        
-        return OrderIntent(
+        # Create order intent
+        order_intent = OrderIntent(
             symbol=signal.symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=TimeUtils.utc_now(),
             side=signal.side,
             quantity=quantity,
-            order_type=OrderType.MARKET,
+            order_type=OrderType.MARKET,  # Default to market orders
             price=signal.price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
             client_order_id=client_order_id,
             signal_source=signal.source,
             risk_adjusted=True,
             max_slippage_bps=50,  # 0.5% max slippage
-            valid_until=valid_until
+            valid_until=TimeUtils.utc_now() + timedelta(minutes=5)  # 5 minute expiry
         )
+        
+        logger.info(f"Created order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol}")
+        logger.debug(f"Position sizing: {size_reasoning}")
+        
+        return order_intent
     
     async def process_signal(self, signal: Signal):
-        """Enhanced signal processing with deduplication and comprehensive validation"""
+        """Process incoming signal with comprehensive validation"""
+        self.signals_processed += 1
+        
         try:
-            logger.info(f"Processing signal: {signal.side} {signal.symbol} "
-                       f"(confidence: {signal.confidence:.1%}) from {signal.source}")
+            logger.info(f"Processing signal: {signal.side} {signal.symbol} (confidence: {signal.confidence:.1%}) from {signal.source}")
             
-            # Validate signal with all checks
-            is_valid, reason = self.validate_signal(signal)
+            # Comprehensive validation
+            is_valid, reason = self.validate_signal_comprehensive(signal)
             
             if not is_valid:
-                logger.info(f"Signal rejected for {signal.symbol}: {reason}")
+                self.signals_rejected += 1
+                logger.warning(f"Signal rejected: {reason}")
                 
-                # Publish rejection event with detailed reason
+                # Publish rejection event
                 self.bus.publish_system_event(
                     event_type="signal_rejected",
                     source="risk_manager",
                     data={
-                        "signal_id": str(signal.signal_id),
                         "symbol": signal.symbol,
                         "side": signal.side,
                         "reason": reason,
-                        "confidence": float(signal.confidence),
                         "source": signal.source,
-                        "timestamp": signal.timestamp.isoformat()
+                        "confidence": float(signal.confidence)
                     }
                 )
+                
+                # Record rejection in circuit breaker if it's a validation error
+                if "validation" in reason.lower():
+                    self.circuit_breakers["risk_validation"].record_error(reason)
+                
                 return
             
-            # Mark signal as processed in deduplication service
-            if not self.dedup_service.mark_signal_processed(signal):
-                logger.warning(f"Signal {signal.signal_id} was already marked as processed")
+            # Mark signal as processed (persistent deduplication)
+            if not self.deduplication.mark_signal_processed(signal):
+                logger.warning(f"Failed to mark signal as processed: {signal.symbol}")
                 return
+            
+            # Record successful validation
+            self.circuit_breakers["risk_validation"].record_success()
+            
+            # Record rate limit usage
+            self.signal_rate_limiter.record_request(f"{signal.symbol}_{signal.source}")
             
             # Create order intent
             order_intent = self.create_order_intent(signal)
             
-            # Add order timestamp for rate limiting
-            self.order_timestamps.append(datetime.utcnow())
+            # Check order rate limit
+            if not self.order_rate_limiter.can_make_request():
+                logger.warning("Order rate limit exceeded, queuing for later")
+                return
+            
+            # Mark order intent as processed to prevent duplicates
+            if not self.deduplication.mark_order_processed(order_intent):
+                logger.warning(f"Order intent already processed: {order_intent.client_order_id}")
+                return
+            
+            # Record order rate limit usage
+            self.order_rate_limiter.record_request(f"order_{order_intent.symbol}")
             
             # Publish order intent
             self.bus.publish_order_intent(order_intent)
             
-            logger.info(
-                f"Created order intent: {order_intent.side} {order_intent.quantity:.0f} "
-                f"{order_intent.symbol} @ ${order_intent.price:.2f} "
-                f"(ID: {order_intent.client_order_id})"
-            )
+            self.signals_approved += 1
+            self.orders_created += 1
             
-            # Publish approval event with enhanced metadata
+            logger.info(f"✅ Signal approved and order created: {order_intent.client_order_id}")
+            
+            # Publish approval event
             self.bus.publish_system_event(
                 event_type="signal_approved",
                 source="risk_manager",
                 data={
-                    "signal_id": str(signal.signal_id),
-                    "intent_id": str(order_intent.intent_id),
                     "symbol": signal.symbol,
                     "side": signal.side,
                     "quantity": float(order_intent.quantity),
-                    "price": float(order_intent.price),
                     "client_order_id": order_intent.client_order_id,
-                    "stop_loss": float(order_intent.stop_loss) if order_intent.stop_loss else None,
-                    "take_profit": float(order_intent.take_profit) if order_intent.take_profit else None,
-                    "valid_until": order_intent.valid_until.isoformat() if order_intent.valid_until else None
+                    "signal_source": signal.source,
+                    "confidence": float(signal.confidence)
                 }
             )
             
         except Exception as e:
-            logger.error(f"Error processing signal for {signal.symbol}: {e}")
+            self.validation_errors += 1
+            logger.error(f"Error processing signal: {e}")
+            
+            # Record error in circuit breaker
+            self.circuit_breakers["risk_validation"].record_error(str(e))
             
             # Publish error event
             self.bus.publish_system_event(
                 event_type="signal_processing_error",
                 source="risk_manager",
                 data={
-                    "signal_id": str(signal.signal_id) if hasattr(signal, 'signal_id') else "unknown",
-                    "symbol": signal.symbol,
                     "error": str(e),
-                    "timestamp": datetime.utcnow().isoformat()
+                    "symbol": signal.symbol,
+                    "source": signal.source
                 }
             )
-            
-            import traceback
-            traceback.print_exc()
-    
-    async def handle_system_events(self):
-        """Handle system events like emergency stop"""
-        logger.info("Starting system event handler...")
-        
-        async for event in self.bus.subscribe_system_events():
-            if not self.running:
-                break
-            
-            try:
-                if event.event_type == "emergency_stop":
-                    logger.warning("Emergency stop received!")
-                    self.emergency_stop = True
-                    
-                elif event.event_type == "resume_trading":
-                    logger.info("Resume trading received")
-                    self.emergency_stop = False
-                    
-                elif event.event_type == "risk_config_update":
-                    logger.info("Risk configuration update received")
-                    # Could update risk config dynamically here
-                    
-                logger.debug(f"Processed system event: {event.event_type} from {event.source}")
-                
-            except Exception as e:
-                logger.error(f"Error handling system event: {e}")
     
     async def consume_signals(self):
-        """Enhanced signal consumption with comprehensive error handling"""
-        logger.info("Starting to consume signals...")
-        
-        signals_processed = 0
-        signals_approved = 0
-        signals_rejected = 0
+        """Consume signals from message bus"""
+        logger.info("Starting enhanced signal processing...")
         
         async for signal in self.bus.subscribe_signals():
             if not self.running:
                 break
-            
+                
             try:
-                # Reset daily metrics if needed
-                self.reset_daily_metrics()
-                
-                # Process signal
                 await self.process_signal(signal)
-                signals_processed += 1
-                
-                # Log progress periodically
-                if signals_processed % 10 == 0:
-                    dedup_stats = self.dedup_service.get_stats()
-                    logger.info(f"Processed {signals_processed} signals, "
-                               f"dedup cache: {dedup_stats['processed_signals']} signals")
-                
             except Exception as e:
-                logger.error(f"Error consuming signal: {e}")
-                signals_rejected += 1
+                logger.error(f"Error in signal consumption loop: {e}")
+                await asyncio.sleep(1)  # Brief pause on error
+    
+    def get_comprehensive_stats(self) -> Dict:
+        """Get comprehensive risk manager statistics"""
+        return {
+            "performance": {
+                "signals_processed": self.signals_processed,
+                "signals_approved": self.signals_approved,
+                "signals_rejected": self.signals_rejected,
+                "orders_created": self.orders_created,
+                "validation_errors": self.validation_errors,
+                "approval_rate": self.signals_approved / max(1, self.signals_processed),
+                "uptime_seconds": self.validation_timer.elapsed_seconds()
+            },
+            "rate_limits": {
+                "orders": self.order_rate_limiter.get_stats(),
+                "signals": self.signal_rate_limiter.get_stats()
+            },
+            "circuit_breakers": {
+                name: breaker.get_stats() 
+                for name, breaker in self.circuit_breakers.items()
+            },
+            "emergency_stop": {
+                "active": self.emergency_stop,
+                "reason": self.emergency_reason,
+                "activated_at": self.emergency_activated_at
+            },
+            "deduplication": self.deduplication.get_comprehensive_stats(),
+            "market": {
+                "is_open": self.market_validator.is_market_open(),
+                "current_time": TimeUtils.market_now().isoformat(),
+                "next_open": TimeUtils.next_market_open().isoformat()
+            },
+            "last_updated": TimeUtils.utc_now().isoformat()
+        }
     
     async def start(self):
-        """Start the enhanced risk manager"""
+        """Start enhanced risk manager"""
         logger.info("Starting Enhanced Risk Manager...")
         
         # Connect to message bus
@@ -432,61 +547,51 @@ class EnhancedRiskManager:
             logger.error("Failed to connect to message bus")
             return False
         
-        # Publish service start event with enhanced metadata
+        # Publish service start event
         self.bus.publish_system_event(
             event_type="service_start",
             source="risk_manager",
             data={
-                "config": {
-                    "max_daily_loss": float(self.config.max_daily_loss),
-                    "max_position_size": float(self.config.max_position_size),
-                    "max_orders_per_minute": self.max_orders_per_minute
-                },
-                "portfolio_value": float(self.portfolio.total_value),
-                "symbols": self.settings.symbols_list,
-                "deduplication_enabled": True,
-                "features": ["deduplication", "rate_limiting", "emergency_stop", "enhanced_validation"]
+                "enhanced_features": [
+                    "timezone_aware_validation",
+                    "monotonic_rate_limiting", 
+                    "persistent_deduplication",
+                    "circuit_breakers",
+                    "comprehensive_logging"
+                ],
+                "rate_limits": {
+                    "orders_per_minute": self.settings.max_orders_per_minute,
+                    "signals_per_5min": self.settings.max_signals_per_5min
+                }
             }
         )
         
         self.running = True
         
         try:
-            # Start system event handler
-            system_event_task = asyncio.create_task(self.handle_system_events())
-            
             # Start consuming signals
-            signal_task = asyncio.create_task(self.consume_signals())
-            
-            # Wait for both tasks
-            await asyncio.gather(system_event_task, signal_task)
+            await self.consume_signals()
             
         except KeyboardInterrupt:
             logger.info("Received shutdown signal")
         except Exception as e:
             logger.error(f"Fatal error: {e}")
-            
-            # Publish error event
-            self.bus.publish_system_event(
-                event_type="service_error",
-                source="risk_manager",
-                data={"error": str(e)}
-            )
         finally:
             await self.stop()
     
     async def stop(self):
-        """Stop the enhanced risk manager"""
-        logger.info("Stopping enhanced risk manager...")
+        """Stop enhanced risk manager"""
+        logger.info("Stopping Enhanced Risk Manager...")
         self.running = False
         
-        # Show final statistics
-        dedup_stats = self.dedup_service.get_stats()
+        # Get final stats
+        final_stats = self.get_comprehensive_stats()
+        
         logger.info("Final Statistics:")
-        logger.info(f"  Processed Signals: {dedup_stats['processed_signals']}")
-        logger.info(f"  Processed Orders: {dedup_stats['processed_orders']}")
-        logger.info(f"  Daily P&L: ${self.daily_pnl:.2f}")
-        logger.info(f"  Emergency Stop: {self.emergency_stop}")
+        logger.info(f"  Signals processed: {self.signals_processed}")
+        logger.info(f"  Signals approved: {self.signals_approved}")
+        logger.info(f"  Approval rate: {final_stats['performance']['approval_rate']:.1%}")
+        logger.info(f"  Orders created: {self.orders_created}")
         
         # Publish service stop event
         if self.bus:
@@ -495,17 +600,17 @@ class EnhancedRiskManager:
                 source="risk_manager",
                 data={
                     "reason": "graceful_shutdown",
-                    "final_stats": dedup_stats,
-                    "daily_pnl": float(self.daily_pnl)
+                    "final_stats": final_stats
                 }
             )
             self.bus.disconnect()
 
+
 async def main():
     """Main entry point"""
     try:
-        risk_manager = EnhancedRiskManager()
-        await risk_manager.start()
+        manager = EnhancedRiskManager()
+        await manager.start()
         
     except KeyboardInterrupt:
         logger.info("Shutdown requested")

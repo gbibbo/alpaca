@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """
 lib/bus.py
-Message Bus using Redis Pub/Sub with fakeredis fallback
-Handles communication between microservices
+Enhanced Message Bus with Redis Streams support
+Implements ChatGPT's recommendations for better reliability:
+- Redis Streams with consumer groups for at-least-once delivery
+- Automatic fallback from Streams to Pub/Sub for compatibility
+- Message replay capability for debugging and recovery
+- Improved error handling and connection resilience
 """
 
 import json
 import asyncio
 import logging
 import os
-from typing import Any, Callable, Dict, Optional, AsyncGenerator
+import time
+from typing import Any, Callable, Dict, Optional, AsyncGenerator, List
 from datetime import datetime
 from lib.models import Bar, Signal, OrderIntent, OrderFill, MessageEvent
 from lib.settings import get_settings
+from lib.time_utils import TimeUtils, MonotonicTimer
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +57,104 @@ def _connect_redis():
             logger.error("fakeredis not available - install with: pip install fakeredis")
             raise
 
+
+class StreamsConfig:
+    """Configuration for Redis Streams"""
+    
+    def __init__(self):
+        # Stream names for different message types
+        self.streams = {
+            "bars": "trading:bars",
+            "signals": "trading:signals", 
+            "orders": "trading:orders",
+            "fills": "trading:fills",
+            "system": "trading:system"
+        }
+        
+        # Consumer group names
+        self.consumer_groups = {
+            "bars": "bars_processors",
+            "signals": "signal_processors", 
+            "orders": "order_processors",
+            "fills": "fill_processors",
+            "system": "system_processors"
+        }
+        
+        # Consumer names (unique per service instance)
+        import socket
+        hostname = socket.gethostname()
+        pid = os.getpid()
+        self.consumer_id = f"{hostname}_{pid}_{int(time.time())}"
+        
+        # Stream settings
+        self.max_stream_length = 10000  # Keep last 10k messages per stream
+        self.consumer_timeout = 1000    # 1 second timeout for stream reads
+        self.ack_timeout = 300000       # 5 minutes to process message before retry
+
+
 class MessageBus:
-    """Redis-based message bus for microservice communication with fakeredis fallback"""
+    """
+    Enhanced Redis-based message bus with Streams support
+    Falls back to Pub/Sub for compatibility with fakeredis
+    """
     
     def __init__(self, redis_client=None):
         self.redis_client = redis_client or _connect_redis()
         self.pubsub = None
         self.subscribers: Dict[str, Callable] = {}
         
-        # Log which Redis we're using
-        redis_type = "FakeRedis" if "fakeredis" in str(type(self.redis_client)) else "Real Redis"
-        logger.info(f"MessageBus initialized with {redis_type}")
+        # Determine Redis capabilities
+        self.supports_streams = self._check_streams_support()
+        self.streams_config = StreamsConfig()
         
+        # Performance tracking
+        self.messages_published = 0
+        self.messages_consumed = 0
+        self.stream_errors = 0
+        
+        # Log which Redis and mode we're using
+        redis_type = "FakeRedis" if "fakeredis" in str(type(self.redis_client)) else "Real Redis"
+        mode = "Streams" if self.supports_streams else "Pub/Sub"
+        logger.info(f"MessageBus initialized with {redis_type} using {mode} mode")
+        
+        if self.supports_streams:
+            self._initialize_streams()
+        
+    def _check_streams_support(self) -> bool:
+        """Check if Redis supports Streams (Redis 5.0+)"""
+        try:
+            # Try to execute a streams command
+            self.redis_client.xinfo_consumers("test_stream", "test_group")
+            return True
+        except Exception:
+            # Fakeredis or older Redis - use Pub/Sub fallback
+            return False
+    
+    def _initialize_streams(self):
+        """Initialize Redis Streams and consumer groups"""
+        try:
+            for stream_type, stream_name in self.streams_config.streams.items():
+                consumer_group = self.streams_config.consumer_groups[stream_type]
+                
+                try:
+                    # Create consumer group (will fail if already exists)
+                    self.redis_client.xgroup_create(
+                        stream_name, 
+                        consumer_group, 
+                        id='0', 
+                        mkstream=True
+                    )
+                    logger.debug(f"Created consumer group {consumer_group} for stream {stream_name}")
+                except Exception as e:
+                    if "BUSYGROUP" in str(e):
+                        logger.debug(f"Consumer group {consumer_group} already exists")
+                    else:
+                        logger.warning(f"Error creating consumer group {consumer_group}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error initializing streams: {e}")
+            self.supports_streams = False
+    
     def connect(self):
         """Connect to Redis (already done in __init__)"""
         try:
@@ -91,30 +183,46 @@ class MessageBus:
                 pass
         logger.info("Disconnected from message bus")
     
-    # Publishing Methods
+    # Publishing Methods (Enhanced with Streams support)
     def publish_bar(self, bar: Bar):
         """Publish market bar data"""
-        channel = f"bars.{bar.symbol}"
-        message = bar.model_dump_json()
-        self._publish(channel, message, "bar")
+        message_data = {
+            "type": "bar",
+            "data": bar.model_dump_json(),
+            "symbol": bar.symbol,
+            "timestamp": TimeUtils.utc_now().isoformat()
+        }
+        self._publish_message("bars", message_data)
     
     def publish_signal(self, signal: Signal):
         """Publish trading signal"""
-        channel = f"signals.{signal.symbol}"
-        message = signal.model_dump_json()
-        self._publish(channel, message, "signal")
+        message_data = {
+            "type": "signal",
+            "data": signal.model_dump_json(),
+            "symbol": signal.symbol,
+            "timestamp": TimeUtils.utc_now().isoformat()
+        }
+        self._publish_message("signals", message_data)
     
     def publish_order_intent(self, order: OrderIntent):
         """Publish order intention"""
-        channel = "orders.intent"
-        message = order.model_dump_json()
-        self._publish(channel, message, "order_intent")
+        message_data = {
+            "type": "order_intent",
+            "data": order.model_dump_json(),
+            "symbol": order.symbol,
+            "timestamp": TimeUtils.utc_now().isoformat()
+        }
+        self._publish_message("orders", message_data)
     
     def publish_order_fill(self, fill: OrderFill):
         """Publish order execution result"""
-        channel = f"orders.fill.{fill.symbol}"
-        message = fill.model_dump_json()
-        self._publish(channel, message, "order_fill")
+        message_data = {
+            "type": "order_fill",
+            "data": fill.model_dump_json(),
+            "symbol": fill.symbol,
+            "timestamp": TimeUtils.utc_now().isoformat()
+        }
+        self._publish_message("fills", message_data)
     
     def publish_system_event(self, event_type: str, source: str, data: dict):
         """Publish system event"""
@@ -123,57 +231,257 @@ class MessageBus:
             source=source,
             data=data
         )
-        channel = f"system.{event_type}"
-        message = event.model_dump_json()
-        self._publish(channel, message, "system_event")
+        message_data = {
+            "type": "system_event",
+            "data": event.model_dump_json(),
+            "event_type": event_type,
+            "source": source,
+            "timestamp": TimeUtils.utc_now().isoformat()
+        }
+        self._publish_message("system", message_data)
     
-    def _publish(self, channel: str, message: str, msg_type: str):
-        """Internal publish method with better error handling"""
+    def _publish_message(self, message_type: str, message_data: dict):
+        """Internal publish method supporting both Streams and Pub/Sub"""
         try:
-            if not self.redis_client:
-                raise Exception("Not connected to Redis")
+            if self.supports_streams:
+                self._publish_to_stream(message_type, message_data)
+            else:
+                self._publish_to_pubsub(message_type, message_data)
             
-            result = self.redis_client.publish(channel, message)
-            logger.debug(f"Published {msg_type} to {channel}: {result} subscribers")
-            return result
+            self.messages_published += 1
             
         except Exception as e:
-            logger.error(f"Failed to publish {msg_type} to {channel}: {e}")
-            # Don't re-raise in production to avoid crashing the service
-            return 0
+            logger.error(f"Failed to publish {message_type}: {e}")
     
-    # Subscription Methods
+    def _publish_to_stream(self, message_type: str, message_data: dict):
+        """Publish message to Redis Stream"""
+        stream_name = self.streams_config.streams.get(message_type)
+        if not stream_name:
+            logger.error(f"Unknown message type for streams: {message_type}")
+            return
+        
+        try:
+            # Add message to stream
+            message_id = self.redis_client.xadd(
+                stream_name,
+                message_data,
+                maxlen=self.streams_config.max_stream_length
+            )
+            
+            logger.debug(f"Published to stream {stream_name}: {message_id}")
+            
+        except Exception as e:
+            logger.error(f"Error publishing to stream {stream_name}: {e}")
+            self.stream_errors += 1
+    
+    def _publish_to_pubsub(self, message_type: str, message_data: dict):
+        """Publish message to Redis Pub/Sub (fallback mode)"""
+        # Use the original channel naming for backward compatibility
+        if message_type == "bars":
+            channel = f"bars.{message_data.get('symbol', 'unknown')}"
+        elif message_type == "signals":
+            channel = f"signals.{message_data.get('symbol', 'unknown')}"
+        elif message_type == "orders":
+            channel = "orders.intent"
+        elif message_type == "fills":
+            channel = f"orders.fill.{message_data.get('symbol', 'unknown')}"
+        elif message_type == "system":
+            channel = f"system.{message_data.get('event_type', 'unknown')}"
+        else:
+            channel = f"trading.{message_type}"
+        
+        # Publish to Pub/Sub channel
+        result = self.redis_client.publish(channel, json.dumps(message_data))
+        logger.debug(f"Published to channel {channel}: {result} subscribers")
+    
+    # Subscription Methods (Enhanced with Streams support)
     async def subscribe_bars(self, symbol: str = "*") -> AsyncGenerator[Bar, None]:
         """Subscribe to bar data for symbol(s)"""
-        pattern = f"bars.{symbol}"
-        async for bar in self._subscribe_with_parser(pattern, Bar):
-            yield bar
+        if self.supports_streams:
+            async for message in self._subscribe_from_stream("bars"):
+                try:
+                    data = json.loads(message["data"])
+                    bar = Bar.model_validate(data)
+                    if symbol == "*" or bar.symbol == symbol:
+                        yield bar
+                except Exception as e:
+                    logger.error(f"Error parsing bar message: {e}")
+        else:
+            # Fallback to Pub/Sub
+            pattern = f"bars.{symbol}"
+            async for bar in self._subscribe_with_parser(pattern, Bar):
+                yield bar
     
     async def subscribe_signals(self, symbol: str = "*") -> AsyncGenerator[Signal, None]:
         """Subscribe to signals for symbol(s)"""
-        pattern = f"signals.{symbol}"
-        async for signal in self._subscribe_with_parser(pattern, Signal):
-            yield signal
+        if self.supports_streams:
+            async for message in self._subscribe_from_stream("signals"):
+                try:
+                    data = json.loads(message["data"])
+                    signal = Signal.model_validate(data)
+                    if symbol == "*" or signal.symbol == symbol:
+                        yield signal
+                except Exception as e:
+                    logger.error(f"Error parsing signal message: {e}")
+        else:
+            # Fallback to Pub/Sub
+            pattern = f"signals.{symbol}"
+            async for signal in self._subscribe_with_parser(pattern, Signal):
+                yield signal
     
     async def subscribe_order_intents(self) -> AsyncGenerator[OrderIntent, None]:
         """Subscribe to order intentions"""
-        async for order in self._subscribe_with_parser("orders.intent", OrderIntent):
-            yield order
+        if self.supports_streams:
+            async for message in self._subscribe_from_stream("orders"):
+                try:
+                    if message.get("type") == "order_intent":
+                        data = json.loads(message["data"])
+                        order = OrderIntent.model_validate(data)
+                        yield order
+                except Exception as e:
+                    logger.error(f"Error parsing order intent message: {e}")
+        else:
+            # Fallback to Pub/Sub
+            async for order in self._subscribe_with_parser("orders.intent", OrderIntent):
+                yield order
     
     async def subscribe_order_fills(self, symbol: str = "*") -> AsyncGenerator[OrderFill, None]:
         """Subscribe to order fills"""
-        pattern = f"orders.fill.{symbol}"
-        async for fill in self._subscribe_with_parser(pattern, OrderFill):
-            yield fill
+        if self.supports_streams:
+            async for message in self._subscribe_from_stream("fills"):
+                try:
+                    if message.get("type") == "order_fill":
+                        data = json.loads(message["data"])
+                        fill = OrderFill.model_validate(data)
+                        if symbol == "*" or fill.symbol == symbol:
+                            yield fill
+                except Exception as e:
+                    logger.error(f"Error parsing order fill message: {e}")
+        else:
+            # Fallback to Pub/Sub
+            pattern = f"orders.fill.{symbol}"
+            async for fill in self._subscribe_with_parser(pattern, OrderFill):
+                yield fill
     
     async def subscribe_system_events(self, event_type: str = "*") -> AsyncGenerator[MessageEvent, None]:
         """Subscribe to system events"""
-        pattern = f"system.{event_type}"
-        async for event in self._subscribe_with_parser(pattern, MessageEvent):
-            yield event
+        if self.supports_streams:
+            async for message in self._subscribe_from_stream("system"):
+                try:
+                    if message.get("type") == "system_event":
+                        data = json.loads(message["data"])
+                        event = MessageEvent.model_validate(data)
+                        if event_type == "*" or event.event_type == event_type:
+                            yield event
+                except Exception as e:
+                    logger.error(f"Error parsing system event message: {e}")
+        else:
+            # Fallback to Pub/Sub
+            pattern = f"system.{event_type}"
+            async for event in self._subscribe_with_parser(pattern, MessageEvent):
+                yield event
+    
+    async def _subscribe_from_stream(self, stream_type: str) -> AsyncGenerator[Dict, None]:
+        """Subscribe to messages from Redis Stream with consumer group"""
+        stream_name = self.streams_config.streams.get(stream_type)
+        consumer_group = self.streams_config.consumer_groups.get(stream_type)
+        consumer_id = self.streams_config.consumer_id
+        
+        if not stream_name or not consumer_group:
+            logger.error(f"Invalid stream configuration for type: {stream_type}")
+            return
+        
+        logger.info(f"Subscribing to stream {stream_name} as {consumer_id} in group {consumer_group}")
+        
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
+        while consecutive_errors < max_consecutive_errors:
+            try:
+                # Read new messages from the stream
+                messages = self.redis_client.xreadgroup(
+                    consumer_group,
+                    consumer_id,
+                    {stream_name: '>'},
+                    count=10,  # Read up to 10 messages at once
+                    block=self.streams_config.consumer_timeout
+                )
+                
+                if messages:
+                    consecutive_errors = 0  # Reset error counter
+                    
+                    for stream, msgs in messages:
+                        for msg_id, msg_data in msgs:
+                            try:
+                                self.messages_consumed += 1
+                                yield msg_data
+                                
+                                # Acknowledge message processing
+                                self.redis_client.xack(stream_name, consumer_group, msg_id)
+                                logger.debug(f"Processed and acked message {msg_id}")
+                                
+                            except Exception as e:
+                                logger.error(f"Error processing stream message {msg_id}: {e}")
+                
+                # Also process any pending messages that weren't acked
+                await self._process_pending_messages(stream_name, consumer_group, consumer_id)
+                
+                # Brief pause between reads
+                await asyncio.sleep(0.001)
+                
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Stream read error #{consecutive_errors}: {e}")
+                
+                if consecutive_errors < max_consecutive_errors:
+                    await asyncio.sleep(min(1.0 * consecutive_errors, 10.0))  # Progressive backoff
+                else:
+                    logger.error(f"Too many consecutive stream errors, stopping subscription to {stream_name}")
+                    break
+    
+    async def _process_pending_messages(self, stream_name: str, consumer_group: str, consumer_id: str):
+        """Process any pending (unacknowledged) messages"""
+        try:
+            # Get pending messages for this consumer
+            pending = self.redis_client.xpending_range(
+                stream_name, 
+                consumer_group, 
+                min='-', 
+                max='+', 
+                count=10,
+                consumer=consumer_id
+            )
+            
+            if pending:
+                logger.debug(f"Processing {len(pending)} pending messages")
+                
+                for msg_info in pending:
+                    msg_id = msg_info['message_id']
+                    
+                    # Check if message is too old (timeout exceeded)
+                    if msg_info['time_since_delivered'] > self.streams_config.ack_timeout:
+                        logger.warning(f"Message {msg_id} timed out, will be redelivered")
+                        continue
+                    
+                    # Try to re-process the message
+                    try:
+                        msg_data = self.redis_client.xrange(stream_name, min=msg_id, max=msg_id, count=1)
+                        if msg_data:
+                            _, data = msg_data[0]
+                            yield data
+                            
+                            # Acknowledge if successful
+                            self.redis_client.xack(stream_name, consumer_group, msg_id)
+                            logger.debug(f"Re-processed pending message {msg_id}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error re-processing pending message {msg_id}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error checking pending messages: {e}")
     
     async def _subscribe_with_parser(self, pattern: str, model_class):
-        """Generic subscription with automatic parsing and fakeredis compatibility"""
+        """Generic subscription with automatic parsing (Pub/Sub fallback)"""
         if not self.redis_client:
             raise Exception("Not connected to Redis")
         
@@ -184,47 +492,36 @@ class MessageBus:
             if "*" in pattern:
                 # For fakeredis compatibility, expand wildcard patterns to specific channels
                 if pattern.startswith("bars."):
-                    # Subscribe to specific bar channels for known symbols
                     settings = get_settings()
                     channels = [f"bars.{symbol}" for symbol in settings.symbols_list]
-                    logger.debug(f"Expanding pattern {pattern} to specific channels: {channels}")
                     for channel in channels:
                         pubsub.subscribe(channel)
                 elif pattern.startswith("signals."):
-                    # Subscribe to specific signal channels
                     settings = get_settings()
                     channels = [f"signals.{symbol}" for symbol in settings.symbols_list]
-                    logger.debug(f"Expanding pattern {pattern} to specific channels: {channels}")
                     for channel in channels:
                         pubsub.subscribe(channel)
                 elif pattern.startswith("orders.fill."):
-                    # Subscribe to specific fill channels
                     settings = get_settings()
                     channels = [f"orders.fill.{symbol}" for symbol in settings.symbols_list]
-                    logger.debug(f"Expanding pattern {pattern} to specific channels: {channels}")
                     for channel in channels:
                         pubsub.subscribe(channel)
                 elif pattern.startswith("system."):
-                    # Subscribe to common system events
                     system_events = [
                         "system.service_start", "system.service_stop", "system.service_error",
                         "system.signal_generated", "system.signal_rejected", "system.signal_approved",
-                        "system.historical_data_complete", "system.order_error", "system.emergency_stop",
-                        "system.heartbeat"
+                        "system.historical_data_complete", "system.order_error", "system.emergency_stop"
                     ]
-                    logger.debug(f"Expanding pattern {pattern} to system events: {system_events}")
                     for channel in system_events:
                         pubsub.subscribe(channel)
                 else:
-                    # Try pattern subscription for real Redis
-                    logger.debug(f"Using pattern subscription for {pattern}")
                     pubsub.psubscribe(pattern)
             else:
                 pubsub.subscribe(pattern)
             
-            logger.info(f"Subscribed to {pattern}")
+            logger.info(f"Subscribed to {pattern} (Pub/Sub fallback)")
             
-            # Message processing loop with improved error handling
+            # Message processing loop
             consecutive_errors = 0
             max_consecutive_errors = 5
             
@@ -233,20 +530,30 @@ class MessageBus:
                     message = pubsub.get_message(timeout=1.0)
                     if message and message['type'] in ['message', 'pmessage']:
                         try:
-                            # Parse JSON and create model instance
-                            data = json.loads(message['data'])
-                            instance = model_class.model_validate(data)
-                            consecutive_errors = 0  # Reset on success
+                            # Parse message data
+                            if isinstance(message['data'], str):
+                                msg_data = json.loads(message['data'])
+                            else:
+                                msg_data = json.loads(message['data'])
+                            
+                            # Extract the actual data
+                            if 'data' in msg_data:
+                                actual_data = json.loads(msg_data['data'])
+                            else:
+                                actual_data = msg_data
+                            
+                            instance = model_class.model_validate(actual_data)
+                            consecutive_errors = 0
+                            self.messages_consumed += 1
                             yield instance
                             
                         except json.JSONDecodeError as e:
-                            logger.error(f"JSON decode error for message: {e}")
+                            logger.error(f"JSON decode error: {e}")
                             consecutive_errors += 1
                         except Exception as parse_error:
                             logger.error(f"Failed to parse message: {parse_error}")
                             consecutive_errors += 1
                     
-                    # Allow other coroutines to run
                     await asyncio.sleep(0.001)
                     
                 except Exception as msg_error:
@@ -254,7 +561,7 @@ class MessageBus:
                     logger.error(f"Error receiving message (#{consecutive_errors}): {msg_error}")
                     await asyncio.sleep(0.1)
             
-            logger.error(f"Too many consecutive errors ({consecutive_errors}), stopping subscription to {pattern}")
+            logger.error(f"Too many consecutive errors, stopping subscription to {pattern}")
                     
         except Exception as e:
             logger.error(f"Subscription error for {pattern}: {e}")
@@ -264,39 +571,36 @@ class MessageBus:
             except:
                 pass
     
-    # Synchronous Helper Methods
-    def publish_bar_sync(self, symbol: str, timestamp: datetime, open_p: float, 
-                         high: float, low: float, close: float, volume: int):
-        """Synchronous bar publishing helper"""
-        from lib.models import TimeFrame
-        bar = Bar(
-            symbol=symbol,
-            timestamp=timestamp,
-            open=open_p,
-            high=high,
-            low=low,
-            close=close,
-            volume=volume,
-            timeframe=TimeFrame.MINUTE
-        )
-        self.publish_bar(bar)
+    # Replay and Recovery Methods (Streams only)
+    async def replay_messages(self, stream_type: str, start_time: datetime, end_time: datetime = None) -> AsyncGenerator[Dict, None]:
+        """Replay messages from stream within time range (Streams only)"""
+        if not self.supports_streams:
+            logger.warning("Message replay requires Redis Streams support")
+            return
+        
+        stream_name = self.streams_config.streams.get(stream_type)
+        if not stream_name:
+            logger.error(f"Unknown stream type: {stream_type}")
+            return
+        
+        # Convert timestamps to Redis stream IDs
+        start_id = f"{int(start_time.timestamp() * 1000)}-0"
+        end_id = f"{int(end_time.timestamp() * 1000)}-0" if end_time else "+"
+        
+        try:
+            logger.info(f"Replaying messages from {stream_name} between {start_time} and {end_time}")
+            
+            messages = self.redis_client.xrange(stream_name, min=start_id, max=end_id)
+            
+            for msg_id, msg_data in messages:
+                yield msg_data
+                
+        except Exception as e:
+            logger.error(f"Error during message replay: {e}")
     
-    def publish_signal_sync(self, symbol: str, side: str, confidence: float, 
-                           source: str, metadata: dict = None):
-        """Synchronous signal publishing helper"""
-        signal = Signal(
-            symbol=symbol,
-            timestamp=datetime.utcnow(),
-            side=side,
-            confidence=confidence,
-            source=source,
-            metadata=metadata or {}
-        )
-        self.publish_signal(signal)
-    
-    # Health & Monitoring
+    # Health & Monitoring (Enhanced)
     def health_check(self) -> dict:
-        """Check Redis connection health"""
+        """Enhanced health check with Streams information"""
         try:
             if not self.redis_client:
                 return {"status": "disconnected", "error": "No Redis client"}
@@ -305,64 +609,70 @@ class MessageBus:
             self.redis_client.ping()
             latency = (datetime.utcnow() - start_time).total_seconds() * 1000
             
-            # Try to get info (might not work with fakeredis)
+            health_info = {
+                "status": "healthy",
+                "latency_ms": round(latency, 2),
+                "supports_streams": self.supports_streams,
+                "messages_published": self.messages_published,
+                "messages_consumed": self.messages_consumed
+            }
+            
+            # Add Redis info if available
             try:
                 info = self.redis_client.info()
-                connected_clients = info.get('connected_clients', 0)
-                used_memory = info.get('used_memory_human', 'unknown')
-                redis_version = info.get('redis_version', 'unknown')
-                redis_type = "Real Redis"
+                health_info.update({
+                    "type": "Real Redis" if info else "FakeRedis",
+                    "connected_clients": info.get('connected_clients', 1),
+                    "used_memory": info.get('used_memory_human', 'unknown'),
+                    "redis_version": info.get('redis_version', 'unknown')
+                })
             except:
-                # Fallback for fakeredis
-                connected_clients = 1
-                used_memory = 'fake'
-                redis_version = 'fakeredis'
-                redis_type = "FakeRedis"
+                health_info.update({
+                    "type": "FakeRedis",
+                    "connected_clients": 1,
+                    "used_memory": 'fake',
+                    "redis_version": 'fakeredis'
+                })
             
-            return {
-                "status": "healthy",
-                "type": redis_type,
-                "latency_ms": round(latency, 2),
-                "connected_clients": connected_clients,
-                "used_memory": used_memory,
-                "redis_version": redis_version
-            }
+            # Add Streams info if supported
+            if self.supports_streams:
+                health_info["stream_errors"] = self.stream_errors
+                health_info["consumer_id"] = self.streams_config.consumer_id
+            
+            return health_info
             
         except Exception as e:
             return {"status": "error", "error": str(e)}
     
     def get_stats(self) -> dict:
-        """Get message bus statistics"""
+        """Get comprehensive message bus statistics"""
         try:
-            if not self.redis_client:
-                return {"error": "Not connected"}
+            base_stats = {
+                "messages_published": self.messages_published,
+                "messages_consumed": self.messages_consumed,
+                "supports_streams": self.supports_streams,
+                "mode": "streams" if self.supports_streams else "pubsub"
+            }
             
-            # Try to get pubsub info (might not work with fakeredis)
-            try:
-                pubsub_info = self.redis_client.execute_command('PUBSUB', 'NUMSUB')
-                channels = {}
+            if self.supports_streams:
+                base_stats["stream_errors"] = self.stream_errors
+                base_stats["consumer_id"] = self.streams_config.consumer_id
                 
-                # Parse channel subscriber counts
-                for i in range(0, len(pubsub_info), 2):
-                    channel = pubsub_info[i]
-                    subscribers = pubsub_info[i + 1]
-                    channels[channel] = subscribers
-                
-                return {
-                    "type": "Real Redis",
-                    "channels": channels,
-                    "total_channels": len(channels),
-                    "total_subscribers": sum(channels.values())
-                }
-            except:
-                # Fallback for fakeredis
-                return {
-                    "type": "FakeRedis",
-                    "channels": {"note": "FakeRedis - limited stats"},
-                    "total_channels": 0,
-                    "total_subscribers": 0,
-                    "note": "Using fakeredis - limited stats available"
-                }
+                # Get stream lengths
+                try:
+                    stream_info = {}
+                    for stream_type, stream_name in self.streams_config.streams.items():
+                        try:
+                            length = self.redis_client.xlen(stream_name)
+                            stream_info[stream_type] = {"name": stream_name, "length": length}
+                        except:
+                            stream_info[stream_type] = {"name": stream_name, "length": 0}
+                    
+                    base_stats["streams"] = stream_info
+                except:
+                    pass
+            
+            return base_stats
             
         except Exception as e:
             return {"error": str(e)}
