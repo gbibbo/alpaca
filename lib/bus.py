@@ -121,12 +121,17 @@ class MessageBus:
             self._initialize_streams()
         
     def _check_streams_support(self) -> bool:
-        """Check if Redis supports Streams (Redis 5.0+)"""
+        """Check if Redis supports Streams (Redis 5.0+) - FIXED VERSION"""
         try:
-            # Try to execute a streams command
-            self.redis_client.xinfo_consumers("test_stream", "test_group")
-            return True
-        except Exception:
+            # Test with a simple XINFO command that doesn't require existing streams
+            result = self.redis_client.execute_command("XINFO", "HELP")
+            # If we get here, Redis supports Streams commands
+            if result and len(result) > 0:
+                logger.debug("Redis Streams support detected")
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"Redis Streams not supported: {e}")
             # Fakeredis or older Redis - use Pub/Sub fallback
             return False
     
@@ -468,9 +473,7 @@ class MessageBus:
                         msg_data = self.redis_client.xrange(stream_name, min=msg_id, max=msg_id, count=1)
                         if msg_data:
                             _, data = msg_data[0]
-                            yield data
-                            
-                            # Acknowledge if successful
+                            # Don't yield here - just acknowledge
                             self.redis_client.xack(stream_name, consumer_group, msg_id)
                             logger.debug(f"Re-processed pending message {msg_id}")
                             

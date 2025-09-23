@@ -39,3 +39,10 @@ flake8>=6.0.0
 
 # Logging & Monitoring
 structlog>=23.0.0
+
+# NEW: Observability and Metrics
+prometheus_client>=0.20.0
+prometheus-fastapi-instrumentator>=7.0.0
+
+# Timezone support
+pytz>=2024.1

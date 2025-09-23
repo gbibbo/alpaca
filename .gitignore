@@ -76,3 +76,20 @@ portfolio_data/
 # Archivos temporales de pip
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Archivos grandes y binarios
+*.tar.gz
+prometheus-*.linux-amd64/
+
+# Archivos PID (temporales de procesos)
+*.pid
+
+# Datos y logs de Redis
+redis-data/
+*.rdb
+
+# Archivos de respaldo
+*.backup.*
+
+# Plantillas no esenciales
+apps/api/templates/
