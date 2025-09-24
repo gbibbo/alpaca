@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 apps/data_ingestor/main.py
-Data Ingestor - Alpaca Market Data to Redis Bus (Fixed Version)
+Data Ingestor - Alpaca Market Data to Redis Bus (Fixed Version with IEX Feed)
 Downloads historical and live data, publishes to message bus with unified configuration
 """
 
@@ -41,6 +41,9 @@ class AlpacaDataIngestor:
         self.bus = get_bus()
         self.running = False
         
+        # Data feed configuration - use IEX for paper trading accounts
+        self.data_feed = os.getenv("ALPACA_DATA_FEED", "iex")
+        
         # Initialize Alpaca client
         if not self.settings.has_alpaca_credentials:
             raise ValueError("Missing Alpaca API credentials in configuration")
@@ -53,6 +56,7 @@ class AlpacaDataIngestor:
         logger.info(f"Initialized data ingestor for symbols: {self.symbols}")
         logger.info(f"Historical days: {self.settings.historical_days}")
         logger.info(f"Paper trading mode: {self.settings.is_paper_trading}")
+        logger.info(f"Data feed: {self.data_feed}")
     
     async def ingest_historical_data(self, days_back: int = None):
         """Download and publish historical data"""
@@ -70,12 +74,13 @@ class AlpacaDataIngestor:
             try:
                 logger.info(f"Downloading historical data for {symbol}")
                 
-                # Request 1-minute bars
+                # Request 1-minute bars with IEX feed
                 request = StockBarsRequest(
                     symbol_or_symbols=[symbol],
                     timeframe=AlpacaTimeFrame.Minute,
                     start=start_time,
-                    end=end_time
+                    end=end_time,
+                    feed=self.data_feed  # Use IEX feed to avoid SIP subscription errors
                 )
                 
                 bars_response = self.data_client.get_stock_bars(request)
@@ -119,7 +124,8 @@ class AlpacaDataIngestor:
             data={
                 "symbols": self.symbols,
                 "days_back": days_back,
-                "total_bars": total_bars_published
+                "total_bars": total_bars_published,
+                "data_feed": self.data_feed
             }
         )
     
@@ -140,11 +146,13 @@ class AlpacaDataIngestor:
                 
                 for symbol in self.symbols:
                     try:
+                        # Request latest bars with IEX feed
                         request = StockBarsRequest(
                             symbol_or_symbols=[symbol],
                             timeframe=AlpacaTimeFrame.Minute,
                             start=start_time,
-                            end=end_time
+                            end=end_time,
+                            feed=self.data_feed  # Use IEX feed to avoid SIP subscription errors
                         )
                         
                         bars_response = self.data_client.get_stock_bars(request)
@@ -202,14 +210,15 @@ class AlpacaDataIngestor:
             logger.error("Failed to connect to message bus")
             return False
         
-        # Publish system start event
+        # Publish service start event
         self.bus.publish_system_event(
             event_type="service_start",
             source="data_ingestor",
             data={
                 "symbols": self.symbols,
                 "historical_days": historical_days or self.settings.historical_days,
-                "paper_trading": self.settings.is_paper_trading
+                "paper_trading": self.settings.is_paper_trading,
+                "data_feed": self.data_feed
             }
         )
         
@@ -241,7 +250,7 @@ class AlpacaDataIngestor:
         logger.info("Stopping data ingestor...")
         self.running = False
         
-        # Publish system stop event
+        # Publish service stop event
         if self.bus:
             self.bus.publish_system_event(
                 event_type="service_stop",

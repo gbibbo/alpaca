@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 lib/bus.py
-Enhanced Message Bus with Redis Streams support
+Enhanced Message Bus with Redis Streams support - FIXED VERSION
 Implements ChatGPT's recommendations for better reliability:
 - Redis Streams with consumer groups for at-least-once delivery
 - Automatic fallback from Streams to Pub/Sub for compatibility
@@ -94,7 +94,7 @@ class StreamsConfig:
 
 class MessageBus:
     """
-    Enhanced Redis-based message bus with Streams support
+    Enhanced Redis-based message bus with Streams support - FIXED VERSION
     Falls back to Pub/Sub for compatibility with fakeredis
     """
     
@@ -103,7 +103,7 @@ class MessageBus:
         self.pubsub = None
         self.subscribers: Dict[str, Callable] = {}
         
-        # Determine Redis capabilities
+        # Determine Redis capabilities - FIXED DETECTION
         self.supports_streams = self._check_streams_support()
         self.streams_config = StreamsConfig()
         
@@ -123,16 +123,28 @@ class MessageBus:
     def _check_streams_support(self) -> bool:
         """Check if Redis supports Streams (Redis 5.0+) - FIXED VERSION"""
         try:
-            # Test with a simple XINFO command that doesn't require existing streams
-            result = self.redis_client.execute_command("XINFO", "HELP")
-            # If we get here, Redis supports Streams commands
-            if result and len(result) > 0:
-                logger.debug("Redis Streams support detected")
+            # First check if this is fakeredis
+            if "fakeredis" in str(type(self.redis_client)).lower():
+                logger.debug("FakeRedis detected - Streams not supported")
+                return False
+            
+            # For real Redis, test with a simple XINFO command
+            try:
+                # Try to get info about a non-existent stream (should return empty result, not error)
+                result = self.redis_client.execute_command("XINFO", "GROUPS", "test:stream:nonexistent")
+                logger.debug("Redis Streams support confirmed")
                 return True
-            return False
+            except Exception as cmd_error:
+                if "no such key" in str(cmd_error).lower() or "ERR no such key" in str(cmd_error):
+                    # This is expected for non-existent stream, means Streams are supported
+                    logger.debug("Redis Streams support confirmed (key not found is expected)")
+                    return True
+                else:
+                    logger.debug(f"Redis Streams not supported: {cmd_error}")
+                    return False
+                    
         except Exception as e:
             logger.debug(f"Redis Streams not supported: {e}")
-            # Fakeredis or older Redis - use Pub/Sub fallback
             return False
     
     def _initialize_streams(self):
