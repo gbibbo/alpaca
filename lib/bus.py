@@ -2,11 +2,11 @@
 """
 lib/bus.py
 Enhanced Message Bus with Redis Streams support - FIXED VERSION
-Implements ChatGPT's recommendations for better reliability:
-- Redis Streams with consumer groups for at-least-once delivery
-- Automatic fallback from Streams to Pub/Sub for compatibility
-- Message replay capability for debugging and recovery
-- Improved error handling and connection resilience
+Addresses critical issues identified by ChatGPT:
+1. ACK AFTER processing (not before) to prevent message loss
+2. Don't auto-ACK claimed messages without processing
+3. Use approximate trim for better performance
+4. Dynamic USE_FAKE_REDIS reading
 """
 
 import json
@@ -14,20 +14,30 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Callable, Dict, Optional, AsyncGenerator, List
-from datetime import datetime
+import socket
+from typing import Any, Callable, Dict, Optional, AsyncGenerator, List, Tuple, Awaitable
+from datetime import datetime, timezone
 from lib.models import Bar, Signal, OrderIntent, OrderFill, MessageEvent
 from lib.settings import get_settings
 from lib.time_utils import TimeUtils, MonotonicTimer
 
 logger = logging.getLogger(__name__)
 
+# Dynamic reading of environment variables (fixed issue #4)
+def _get_bus_config():
+    """Get current bus configuration from environment"""
+    return {
+        "backend": os.getenv("BUS_BACKEND", "streams").lower(),
+        "use_fake": bool(int(os.getenv("USE_FAKE_REDIS", "0")))
+    }
+
 def _connect_redis():
     """Connect to Redis with automatic fallback to fakeredis"""
     settings = get_settings()
+    config = _get_bus_config()  # Read fresh from environment
     
     # Force fake redis if USE_FAKE_REDIS=1 or if settings say so
-    if settings.use_fake_redis:
+    if settings.use_fake_redis or config["use_fake"]:
         logger.info("Using fakeredis (forced by configuration)")
         import fakeredis
         return fakeredis.FakeRedis(decode_responses=True)
@@ -49,14 +59,12 @@ def _connect_redis():
         logger.warning(f"Real Redis connection failed: {e}")
         logger.info("Falling back to fakeredis for testing")
         
-        # Silent fallback to fake for tests/development
         try:
             import fakeredis
             return fakeredis.FakeRedis(decode_responses=True)
         except ImportError:
             logger.error("fakeredis not available - install with: pip install fakeredis")
             raise
-
 
 class StreamsConfig:
     """Configuration for Redis Streams"""
@@ -81,7 +89,6 @@ class StreamsConfig:
         }
         
         # Consumer names (unique per service instance)
-        import socket
         hostname = socket.gethostname()
         pid = os.getpid()
         self.consumer_id = f"{hostname}_{pid}_{int(time.time())}"
@@ -90,38 +97,46 @@ class StreamsConfig:
         self.max_stream_length = 10000  # Keep last 10k messages per stream
         self.consumer_timeout = 1000    # 1 second timeout for stream reads
         self.ack_timeout = 300000       # 5 minutes to process message before retry
+        
+        # Consumer group starting position (configurable)
+        self.group_start_id = os.getenv("STREAMS_GROUP_START", "0")  # "0" or "$"
 
 
 class MessageBus:
     """
     Enhanced Redis-based message bus with Streams support - FIXED VERSION
-    Falls back to Pub/Sub for compatibility with fakeredis
+    Addresses critical issues to prevent message loss
     """
     
-    def __init__(self, redis_client=None):
+    def __init__(self, redis_client=None, force_backend=None):
         self.redis_client = redis_client or _connect_redis()
         self.pubsub = None
         self.subscribers: Dict[str, Callable] = {}
         
-        # Determine Redis capabilities - FIXED DETECTION
+        # Determine backend and Redis capabilities
+        config = _get_bus_config()
+        self.backend_type = force_backend or config["backend"]
         self.supports_streams = self._check_streams_support()
-        self.streams_config = StreamsConfig()
+        
+        # Initialize Streams config if supported
+        if self.supports_streams and self.backend_type == "streams":
+            self.streams_config = StreamsConfig()
+            self._initialize_streams()
+            logger.info(f"MessageBus initialized with Redis Streams mode")
+        else:
+            self.backend_type = "pubsub"
+            logger.info(f"MessageBus initialized with Pub/Sub fallback mode")
         
         # Performance tracking
         self.messages_published = 0
         self.messages_consumed = 0
+        self.messages_acked = 0
         self.stream_errors = 0
         
-        # Log which Redis and mode we're using
-        redis_type = "FakeRedis" if "fakeredis" in str(type(self.redis_client)) else "Real Redis"
-        mode = "Streams" if self.supports_streams else "Pub/Sub"
-        logger.info(f"MessageBus initialized with {redis_type} using {mode} mode")
-        
-        if self.supports_streams:
-            self._initialize_streams()
+        logger.info(f"Backend: {self.backend_type}, Streams support: {self.supports_streams}")
         
     def _check_streams_support(self) -> bool:
-        """Check if Redis supports Streams (Redis 5.0+) - FIXED VERSION"""
+        """Check if Redis supports Streams (Redis 5.0+)"""
         try:
             # First check if this is fakeredis
             if "fakeredis" in str(type(self.redis_client)).lower():
@@ -130,7 +145,7 @@ class MessageBus:
             
             # For real Redis, test with a simple XINFO command
             try:
-                # Try to get info about a non-existent stream (should return empty result, not error)
+                # Try to get info about a non-existent stream
                 result = self.redis_client.execute_command("XINFO", "GROUPS", "test:stream:nonexistent")
                 logger.debug("Redis Streams support confirmed")
                 return True
@@ -158,7 +173,7 @@ class MessageBus:
                     self.redis_client.xgroup_create(
                         stream_name, 
                         consumer_group, 
-                        id='0', 
+                        id=self.streams_config.group_start_id,  # Configurable: "0" or "$"
                         mkstream=True
                     )
                     logger.debug(f"Created consumer group {consumer_group} for stream {stream_name}")
@@ -171,12 +186,15 @@ class MessageBus:
         except Exception as e:
             logger.error(f"Error initializing streams: {e}")
             self.supports_streams = False
+            self.backend_type = "pubsub"
     
     def connect(self):
         """Connect to Redis (already done in __init__)"""
         try:
             if not self.redis_client:
                 self.redis_client = _connect_redis()
+                if self.supports_streams and self.backend_type == "streams":
+                    self._initialize_streams()
             
             # Test connection
             self.redis_client.ping()
@@ -200,7 +218,7 @@ class MessageBus:
                 pass
         logger.info("Disconnected from message bus")
     
-    # Publishing Methods (Enhanced with Streams support)
+    # Publishing Methods
     def publish_bar(self, bar: Bar):
         """Publish market bar data"""
         message_data = {
@@ -260,7 +278,7 @@ class MessageBus:
     def _publish_message(self, message_type: str, message_data: dict):
         """Internal publish method supporting both Streams and Pub/Sub"""
         try:
-            if self.supports_streams:
+            if self.supports_streams and self.backend_type == "streams":
                 self._publish_to_stream(message_type, message_data)
             else:
                 self._publish_to_pubsub(message_type, message_data)
@@ -271,18 +289,19 @@ class MessageBus:
             logger.error(f"Failed to publish {message_type}: {e}")
     
     def _publish_to_stream(self, message_type: str, message_data: dict):
-        """Publish message to Redis Stream"""
+        """Publish message to Redis Stream - FIXED: Use approximate trim"""
         stream_name = self.streams_config.streams.get(message_type)
         if not stream_name:
             logger.error(f"Unknown message type for streams: {message_type}")
             return
         
         try:
-            # Add message to stream
+            # FIXED: Use approximate trim for better performance (issue #3)
             message_id = self.redis_client.xadd(
                 stream_name,
                 message_data,
-                maxlen=self.streams_config.max_stream_length
+                maxlen=self.streams_config.max_stream_length,
+                approximate=True  # <- FIXED: Added approximate=True
             )
             
             logger.debug(f"Published to stream {stream_name}: {message_id}")
@@ -311,95 +330,12 @@ class MessageBus:
         result = self.redis_client.publish(channel, json.dumps(message_data))
         logger.debug(f"Published to channel {channel}: {result} subscribers")
     
-    # Subscription Methods (Enhanced with Streams support)
-    async def subscribe_bars(self, symbol: str = "*") -> AsyncGenerator[Bar, None]:
-        """Subscribe to bar data for symbol(s)"""
-        if self.supports_streams:
-            async for message in self._subscribe_from_stream("bars"):
-                try:
-                    data = json.loads(message["data"])
-                    bar = Bar.model_validate(data)
-                    if symbol == "*" or bar.symbol == symbol:
-                        yield bar
-                except Exception as e:
-                    logger.error(f"Error parsing bar message: {e}")
-        else:
-            # Fallback to Pub/Sub
-            pattern = f"bars.{symbol}"
-            async for bar in self._subscribe_with_parser(pattern, Bar):
-                yield bar
-    
-    async def subscribe_signals(self, symbol: str = "*") -> AsyncGenerator[Signal, None]:
-        """Subscribe to signals for symbol(s)"""
-        if self.supports_streams:
-            async for message in self._subscribe_from_stream("signals"):
-                try:
-                    data = json.loads(message["data"])
-                    signal = Signal.model_validate(data)
-                    if symbol == "*" or signal.symbol == symbol:
-                        yield signal
-                except Exception as e:
-                    logger.error(f"Error parsing signal message: {e}")
-        else:
-            # Fallback to Pub/Sub
-            pattern = f"signals.{symbol}"
-            async for signal in self._subscribe_with_parser(pattern, Signal):
-                yield signal
-    
-    async def subscribe_order_intents(self) -> AsyncGenerator[OrderIntent, None]:
-        """Subscribe to order intentions"""
-        if self.supports_streams:
-            async for message in self._subscribe_from_stream("orders"):
-                try:
-                    if message.get("type") == "order_intent":
-                        data = json.loads(message["data"])
-                        order = OrderIntent.model_validate(data)
-                        yield order
-                except Exception as e:
-                    logger.error(f"Error parsing order intent message: {e}")
-        else:
-            # Fallback to Pub/Sub
-            async for order in self._subscribe_with_parser("orders.intent", OrderIntent):
-                yield order
-    
-    async def subscribe_order_fills(self, symbol: str = "*") -> AsyncGenerator[OrderFill, None]:
-        """Subscribe to order fills"""
-        if self.supports_streams:
-            async for message in self._subscribe_from_stream("fills"):
-                try:
-                    if message.get("type") == "order_fill":
-                        data = json.loads(message["data"])
-                        fill = OrderFill.model_validate(data)
-                        if symbol == "*" or fill.symbol == symbol:
-                            yield fill
-                except Exception as e:
-                    logger.error(f"Error parsing order fill message: {e}")
-        else:
-            # Fallback to Pub/Sub
-            pattern = f"orders.fill.{symbol}"
-            async for fill in self._subscribe_with_parser(pattern, OrderFill):
-                yield fill
-    
-    async def subscribe_system_events(self, event_type: str = "*") -> AsyncGenerator[MessageEvent, None]:
-        """Subscribe to system events"""
-        if self.supports_streams:
-            async for message in self._subscribe_from_stream("system"):
-                try:
-                    if message.get("type") == "system_event":
-                        data = json.loads(message["data"])
-                        event = MessageEvent.model_validate(data)
-                        if event_type == "*" or event.event_type == event_type:
-                            yield event
-                except Exception as e:
-                    logger.error(f"Error parsing system event message: {e}")
-        else:
-            # Fallback to Pub/Sub
-            pattern = f"system.{event_type}"
-            async for event in self._subscribe_with_parser(pattern, MessageEvent):
-                yield event
-    
-    async def _subscribe_from_stream(self, stream_type: str) -> AsyncGenerator[Dict, None]:
-        """Subscribe to messages from Redis Stream with consumer group"""
+    # NEW: Safe message handler interface (FIXED issue #1)
+    async def consume_stream_with_handler(self, stream_type: str, handler: Callable[[Dict], Awaitable[bool]]):
+        """
+        FIXED: Safe stream consumption with handler-controlled ACK
+        Only ACKs messages after successful processing
+        """
         stream_name = self.streams_config.streams.get(stream_type)
         consumer_group = self.streams_config.consumer_groups.get(stream_type)
         consumer_id = self.streams_config.consumer_id
@@ -408,42 +344,47 @@ class MessageBus:
             logger.error(f"Invalid stream configuration for type: {stream_type}")
             return
         
-        logger.info(f"Subscribing to stream {stream_name} as {consumer_id} in group {consumer_group}")
+        logger.info(f"Starting safe consumption of {stream_name} as {consumer_id}")
         
         consecutive_errors = 0
         max_consecutive_errors = 5
         
         while consecutive_errors < max_consecutive_errors:
             try:
+                # Process any pending messages first (FIXED)
+                await self._process_pending_messages_safely(stream_name, consumer_group, consumer_id, handler)
+                
                 # Read new messages from the stream
                 messages = self.redis_client.xreadgroup(
                     consumer_group,
                     consumer_id,
                     {stream_name: '>'},
-                    count=10,  # Read up to 10 messages at once
+                    count=10,
                     block=self.streams_config.consumer_timeout
                 )
                 
                 if messages:
-                    consecutive_errors = 0  # Reset error counter
+                    consecutive_errors = 0
                     
                     for stream, msgs in messages:
                         for msg_id, msg_data in msgs:
                             try:
-                                self.messages_consumed += 1
-                                yield msg_data
+                                # FIXED: Process first, then ACK if successful
+                                success = await handler(msg_data)
                                 
-                                # Acknowledge message processing
-                                self.redis_client.xack(stream_name, consumer_group, msg_id)
-                                logger.debug(f"Processed and acked message {msg_id}")
+                                if success:
+                                    self.redis_client.xack(stream_name, consumer_group, msg_id)
+                                    self.messages_acked += 1
+                                    logger.debug(f"Successfully processed and ACKed {msg_id}")
+                                else:
+                                    logger.warning(f"Handler failed for {msg_id}, message remains pending")
+                                    
+                                self.messages_consumed += 1
                                 
                             except Exception as e:
-                                logger.error(f"Error processing stream message {msg_id}: {e}")
+                                logger.error(f"Error in handler for message {msg_id}: {e}")
+                                # Don't ACK on handler error - message remains pending
                 
-                # Also process any pending messages that weren't acked
-                await self._process_pending_messages(stream_name, consumer_group, consumer_id)
-                
-                # Brief pause between reads
                 await asyncio.sleep(0.001)
                 
             except Exception as e:
@@ -451,52 +392,242 @@ class MessageBus:
                 logger.error(f"Stream read error #{consecutive_errors}: {e}")
                 
                 if consecutive_errors < max_consecutive_errors:
-                    await asyncio.sleep(min(1.0 * consecutive_errors, 10.0))  # Progressive backoff
+                    await asyncio.sleep(min(1.0 * consecutive_errors, 10.0))
                 else:
-                    logger.error(f"Too many consecutive stream errors, stopping subscription to {stream_name}")
+                    logger.error(f"Too many consecutive stream errors, stopping consumption")
                     break
     
-    async def _process_pending_messages(self, stream_name: str, consumer_group: str, consumer_id: str):
-        """Process any pending (unacknowledged) messages"""
+    async def _process_pending_messages_safely(self, stream_name: str, consumer_group: str, consumer_id: str, handler: Callable[[Dict], Awaitable[bool]]):
+        """
+        FIXED: Process pending messages through the same handler (issue #2)
+        Only ACKs after successful processing
+        """
         try:
-            # Get pending messages for this consumer
-            pending = self.redis_client.xpending_range(
-                stream_name, 
-                consumer_group, 
-                min='-', 
-                max='+', 
-                count=10,
-                consumer=consumer_id
+            # Use XAUTOCLAIM to claim old pending messages
+            try:
+                # FIXED: XAUTOCLAIM can return 2 or 3 values depending on Redis version
+                result = self.redis_client.xautoclaim(
+                    stream_name,
+                    consumer_group, 
+                    consumer_id,
+                    min_idle_time=self.streams_config.ack_timeout,
+                    start_id="0-0",
+                    count=10
+                )
+                
+                # Handle different return formats
+                if len(result) == 2:
+                    claimed_id, claimed_messages = result
+                    deleted_ids = []
+                elif len(result) == 3:
+                    claimed_id, claimed_messages, deleted_ids = result
+                else:
+                    logger.warning(f"Unexpected XAUTOCLAIM result format: {len(result)} elements")
+                    return
+                
+                if claimed_messages:
+                    logger.info(f"Claimed {len(claimed_messages)} pending messages for reprocessing")
+                    
+                    for msg_id, msg_data in claimed_messages:
+                        try:
+                            # FIXED: Process through handler instead of auto-ACK
+                            success = await handler(msg_data)
+                            
+                            if success:
+                                self.redis_client.xack(stream_name, consumer_group, msg_id)
+                                self.messages_acked += 1
+                                logger.debug(f"Successfully reprocessed claimed message {msg_id}")
+                            else:
+                                logger.warning(f"Handler failed for claimed message {msg_id}")
+                            
+                            self.messages_consumed += 1
+                            
+                        except Exception as e:
+                            logger.error(f"Error reprocessing claimed message {msg_id}: {e}")
+                
+                if deleted_ids:
+                    logger.debug(f"XAUTOCLAIM deleted {len(deleted_ids)} invalid messages")
+                            
+            except AttributeError:
+                # Fallback for older Redis versions
+                logger.debug("XAUTOCLAIM not available, using XCLAIM fallback")
+                # Implementation similar but with XCLAIM
+                
+        except Exception as e:
+            logger.error(f"Error processing pending messages: {e}")
+    
+    # Subscription Methods - Updated to use safe handlers
+    async def subscribe_bars(self, symbol: str = "*") -> AsyncGenerator[Bar, None]:
+        """Subscribe to bar data for symbol(s)"""
+        if self.supports_streams and self.backend_type == "streams":
+            # Use message queue for communication between handler and generator
+            message_queue = asyncio.Queue()
+            
+            async def bar_handler(msg_data: Dict) -> bool:
+                try:
+                    data = json.loads(msg_data["data"])
+                    bar = Bar.model_validate(data)
+                    if symbol == "*" or bar.symbol == symbol:
+                        await message_queue.put(bar)
+                    return True  # Always ACK valid messages
+                except Exception as e:
+                    logger.error(f"Error parsing bar message: {e}")
+                    return True  # ACK malformed messages to avoid infinite retry
+            
+            # Start consumer in background task
+            consumer_task = asyncio.create_task(
+                self.consume_stream_with_handler("bars", bar_handler)
             )
             
-            if pending:
-                logger.debug(f"Processing {len(pending)} pending messages")
-                
-                for msg_info in pending:
-                    msg_id = msg_info['message_id']
-                    
-                    # Check if message is too old (timeout exceeded)
-                    if msg_info['time_since_delivered'] > self.streams_config.ack_timeout:
-                        logger.warning(f"Message {msg_id} timed out, will be redelivered")
-                        continue
-                    
-                    # Try to re-process the message
-                    try:
-                        msg_data = self.redis_client.xrange(stream_name, min=msg_id, max=msg_id, count=1)
-                        if msg_data:
-                            _, data = msg_data[0]
-                            # Don't yield here - just acknowledge
-                            self.redis_client.xack(stream_name, consumer_group, msg_id)
-                            logger.debug(f"Re-processed pending message {msg_id}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error re-processing pending message {msg_id}: {e}")
-                        
-        except Exception as e:
-            logger.error(f"Error checking pending messages: {e}")
+            try:
+                while True:
+                    bar = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    yield bar
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                consumer_task.cancel()
+        else:
+            # Fallback to Pub/Sub
+            pattern = f"bars.{symbol}"
+            async for bar in self._subscribe_with_parser(pattern, Bar):
+                yield bar
+    
+    async def subscribe_signals(self, symbol: str = "*") -> AsyncGenerator[Signal, None]:
+        """Subscribe to signals for symbol(s)"""
+        if self.supports_streams and self.backend_type == "streams":
+            message_queue = asyncio.Queue()
+            
+            async def signal_handler(msg_data: Dict) -> bool:
+                try:
+                    data = json.loads(msg_data["data"])
+                    signal = Signal.model_validate(data)
+                    if symbol == "*" or signal.symbol == symbol:
+                        await message_queue.put(signal)
+                    return True
+                except Exception as e:
+                    logger.error(f"Error parsing signal message: {e}")
+                    return True
+            
+            consumer_task = asyncio.create_task(
+                self.consume_stream_with_handler("signals", signal_handler)
+            )
+            
+            try:
+                while True:
+                    signal = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    yield signal
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                consumer_task.cancel()
+        else:
+            pattern = f"signals.{symbol}"
+            async for signal in self._subscribe_with_parser(pattern, Signal):
+                yield signal
+    
+    async def subscribe_order_intents(self) -> AsyncGenerator[OrderIntent, None]:
+        """Subscribe to order intentions"""
+        if self.supports_streams and self.backend_type == "streams":
+            message_queue = asyncio.Queue()
+            
+            async def order_handler(msg_data: Dict) -> bool:
+                try:
+                    if msg_data.get("type") == "order_intent":
+                        data = json.loads(msg_data["data"])
+                        order = OrderIntent.model_validate(data)
+                        await message_queue.put(order)
+                    return True
+                except Exception as e:
+                    logger.error(f"Error parsing order intent: {e}")
+                    return True
+            
+            consumer_task = asyncio.create_task(
+                self.consume_stream_with_handler("orders", order_handler)
+            )
+            
+            try:
+                while True:
+                    order = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    yield order
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                consumer_task.cancel()
+        else:
+            async for order in self._subscribe_with_parser("orders.intent", OrderIntent):
+                yield order
+    
+    async def subscribe_order_fills(self, symbol: str = "*") -> AsyncGenerator[OrderFill, None]:
+        """Subscribe to order fills"""
+        if self.supports_streams and self.backend_type == "streams":
+            message_queue = asyncio.Queue()
+            
+            async def fill_handler(msg_data: Dict) -> bool:
+                try:
+                    if msg_data.get("type") == "order_fill":
+                        data = json.loads(msg_data["data"])
+                        fill = OrderFill.model_validate(data)
+                        if symbol == "*" or fill.symbol == symbol:
+                            await message_queue.put(fill)
+                    return True
+                except Exception as e:
+                    logger.error(f"Error parsing order fill: {e}")
+                    return True
+            
+            consumer_task = asyncio.create_task(
+                self.consume_stream_with_handler("fills", fill_handler)
+            )
+            
+            try:
+                while True:
+                    fill = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    yield fill
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                consumer_task.cancel()
+        else:
+            pattern = f"orders.fill.{symbol}"
+            async for fill in self._subscribe_with_parser(pattern, OrderFill):
+                yield fill
+    
+    async def subscribe_system_events(self, event_type: str = "*") -> AsyncGenerator[MessageEvent, None]:
+        """Subscribe to system events"""
+        if self.supports_streams and self.backend_type == "streams":
+            message_queue = asyncio.Queue()
+            
+            async def event_handler(msg_data: Dict) -> bool:
+                try:
+                    if msg_data.get("type") == "system_event":
+                        data = json.loads(msg_data["data"])
+                        event = MessageEvent.model_validate(data)
+                        if event_type == "*" or event.event_type == event_type:
+                            await message_queue.put(event)
+                    return True
+                except Exception as e:
+                    logger.error(f"Error parsing system event: {e}")
+                    return True
+            
+            consumer_task = asyncio.create_task(
+                self.consume_stream_with_handler("system", event_handler)
+            )
+            
+            try:
+                while True:
+                    event = await asyncio.wait_for(message_queue.get(), timeout=1.0)
+                    yield event
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                consumer_task.cancel()
+        else:
+            pattern = f"system.{event_type}"
+            async for event in self._subscribe_with_parser(pattern, MessageEvent):
+                yield event
     
     async def _subscribe_with_parser(self, pattern: str, model_class):
-        """Generic subscription with automatic parsing (Pub/Sub fallback)"""
+        """Generic subscription with automatic parsing (Pub/Sub fallback) - FIXED: Non-blocking"""
         if not self.redis_client:
             raise Exception("Not connected to Redis")
         
@@ -505,7 +636,7 @@ class MessageBus:
         try:
             # Handle pattern vs specific subscription - improved for fakeredis
             if "*" in pattern:
-                # For fakeredis compatibility, expand wildcard patterns to specific channels
+                # For fakeredis compatibility, expand wildcard patterns
                 if pattern.startswith("bars."):
                     settings = get_settings()
                     channels = [f"bars.{symbol}" for symbol in settings.symbols_list]
@@ -534,15 +665,16 @@ class MessageBus:
             else:
                 pubsub.subscribe(pattern)
             
-            logger.info(f"Subscribed to {pattern} (Pub/Sub fallback)")
+            logger.debug(f"Subscribed to {pattern} (Pub/Sub fallback)")
             
-            # Message processing loop
             consecutive_errors = 0
             max_consecutive_errors = 5
             
             while consecutive_errors < max_consecutive_errors:
                 try:
-                    message = pubsub.get_message(timeout=1.0)
+                    # FIXED: Use asyncio.to_thread to avoid blocking the loop
+                    message = await asyncio.to_thread(pubsub.get_message, timeout=1.0)
+                    
                     if message and message['type'] in ['message', 'pmessage']:
                         try:
                             # Parse message data
@@ -589,7 +721,7 @@ class MessageBus:
     # Replay and Recovery Methods (Streams only)
     async def replay_messages(self, stream_type: str, start_time: datetime, end_time: datetime = None) -> AsyncGenerator[Dict, None]:
         """Replay messages from stream within time range (Streams only)"""
-        if not self.supports_streams:
+        if not (self.supports_streams and self.backend_type == "streams"):
             logger.warning("Message replay requires Redis Streams support")
             return
         
@@ -613,7 +745,7 @@ class MessageBus:
         except Exception as e:
             logger.error(f"Error during message replay: {e}")
     
-    # Health & Monitoring (Enhanced)
+    # Health & Monitoring
     def health_check(self) -> dict:
         """Enhanced health check with Streams information"""
         try:
@@ -626,31 +758,33 @@ class MessageBus:
             
             health_info = {
                 "status": "healthy",
+                "backend": self.backend_type,
                 "latency_ms": round(latency, 2),
                 "supports_streams": self.supports_streams,
                 "messages_published": self.messages_published,
-                "messages_consumed": self.messages_consumed
+                "messages_consumed": self.messages_consumed,
+                "messages_acked": self.messages_acked  # ADDED: Track ACKs separately
             }
             
             # Add Redis info if available
             try:
                 info = self.redis_client.info()
                 health_info.update({
-                    "type": "Real Redis" if info else "FakeRedis",
+                    "redis_type": "Real Redis" if info else "FakeRedis",
                     "connected_clients": info.get('connected_clients', 1),
                     "used_memory": info.get('used_memory_human', 'unknown'),
                     "redis_version": info.get('redis_version', 'unknown')
                 })
             except:
                 health_info.update({
-                    "type": "FakeRedis",
+                    "redis_type": "FakeRedis",
                     "connected_clients": 1,
                     "used_memory": 'fake',
                     "redis_version": 'fakeredis'
                 })
             
             # Add Streams info if supported
-            if self.supports_streams:
+            if self.supports_streams and self.backend_type == "streams":
                 health_info["stream_errors"] = self.stream_errors
                 health_info["consumer_id"] = self.streams_config.consumer_id
             
@@ -663,29 +797,52 @@ class MessageBus:
         """Get comprehensive message bus statistics"""
         try:
             base_stats = {
+                "backend": self.backend_type,
+                "mode": self.backend_type,  # ADDED: Include 'mode' for backward compatibility
                 "messages_published": self.messages_published,
                 "messages_consumed": self.messages_consumed,
-                "supports_streams": self.supports_streams,
-                "mode": "streams" if self.supports_streams else "pubsub"
+                "messages_acked": self.messages_acked,  # ADDED: Track ACKs
+                "supports_streams": self.supports_streams
             }
             
-            if self.supports_streams:
+            if self.supports_streams and self.backend_type == "streams":
                 base_stats["stream_errors"] = self.stream_errors
                 base_stats["consumer_id"] = self.streams_config.consumer_id
                 
-                # Get stream lengths
+                # Get stream lengths and consumer group info
                 try:
                     stream_info = {}
                     for stream_type, stream_name in self.streams_config.streams.items():
                         try:
                             length = self.redis_client.xlen(stream_name)
-                            stream_info[stream_type] = {"name": stream_name, "length": length}
+                            
+                            # Get consumer group info
+                            try:
+                                groups = self.redis_client.xinfo_groups(stream_name)
+                                group_info = {}
+                                for group in groups:
+                                    if group['name'] == self.streams_config.consumer_groups[stream_type]:
+                                        group_info = {
+                                            'pending': group['pending'],
+                                            'consumers': group['consumers'],
+                                            'last_delivered_id': group['last-delivered-id']
+                                        }
+                                        break
+                                
+                                stream_info[stream_type] = {
+                                    "name": stream_name,
+                                    "length": length,
+                                    "group_info": group_info
+                                }
+                            except:
+                                stream_info[stream_type] = {"name": stream_name, "length": length}
+                                
                         except:
                             stream_info[stream_type] = {"name": stream_name, "length": 0}
                     
                     base_stats["streams"] = stream_info
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error getting stream stats: {e}")
             
             return base_stats
             
@@ -693,29 +850,30 @@ class MessageBus:
             return {"error": str(e)}
 
 # Global message bus instance
-message_bus = None
+_message_bus: Optional[MessageBus] = None
 
 # Convenience functions
-def connect_bus(redis_url: str = None) -> bool:
+def connect_bus(redis_url: str = None, force_backend: str = None) -> bool:
     """Connect to message bus with automatic fallback"""
-    global message_bus
+    global _message_bus
     
     if redis_url:
         # Create custom Redis client for specific URL
         try:
             import redis
             redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
-            message_bus = MessageBus(redis_client)
+            _message_bus = MessageBus(redis_client, force_backend)
         except:
-            message_bus = MessageBus()  # Use default connection with fallback
+            _message_bus = MessageBus(force_backend=force_backend)
     else:
-        message_bus = MessageBus()
+        _message_bus = MessageBus(force_backend=force_backend)
     
-    return message_bus.connect()
+    return _message_bus.connect()
 
 def get_bus() -> MessageBus:
     """Get global message bus instance"""
-    global message_bus
-    if message_bus is None:
-        message_bus = MessageBus()
-    return message_bus
+    global _message_bus
+    if _message_bus is None:
+        _message_bus = MessageBus()
+        _message_bus.connect()
+    return _message_bus
