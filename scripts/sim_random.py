@@ -291,10 +291,13 @@ class RandomStrategy:
 
 class SimpleBacktester:
     """Simple backtester for rapid strategy validation"""
-    
-    def __init__(self, initial_cash: float = 100000, position_size_pct: float = 0.1):
+
+    def __init__(self, initial_cash: float = 100000, position_size_pct: float = 0.1,
+                 position_notional: float = None, slippage_bps: int = 0):
         self.initial_cash = initial_cash
         self.position_size_pct = position_size_pct
+        self.position_notional = position_notional  # Fixed notional size in USD
+        self.slippage_bps = slippage_bps  # Slippage in basis points
         self.reset()
     
     def reset(self):
@@ -311,43 +314,56 @@ class SimpleBacktester:
         return self.cash + (self.position_size * current_price)
     
     def buy(self, bar: Bar) -> bool:
-        """Execute buy order"""
+        """Execute buy order with slippage"""
         if self.position_size > 0:
             return False  # Already long
-        
+
+        # Apply slippage to execution price
+        execution_price = self._apply_slippage(bar.close, "BUY")
+
         # Calculate position size
-        portfolio_value = self.get_portfolio_value(bar.close)
-        target_value = portfolio_value * self.position_size_pct
-        shares = int(target_value / bar.close)
-        
+        if self.position_notional:
+            # Use fixed notional amount
+            target_value = self.position_notional
+        else:
+            # Use percentage of portfolio
+            portfolio_value = self.get_portfolio_value(bar.close)
+            target_value = portfolio_value * self.position_size_pct
+
+        shares = int(target_value / execution_price)
+
         if shares < 1:
             return False
-        
-        cost = shares * bar.close
+
+        cost = shares * execution_price
         if cost > self.cash:
             return False
-        
+
         # Execute trade
         self.cash -= cost
         self.position_size = shares
-        self.entry_price = bar.close
-        
-        print(f"🟢 BUY  {bar.timestamp.date()} | {shares:4} shares @ ${bar.close:7.2f} | Cash: ${self.cash:10,.2f}")
+        self.entry_price = execution_price
+
+        slippage_str = f" (slippage: {self.slippage_bps}bps)" if self.slippage_bps > 0 else ""
+        print(f"🟢 BUY  {bar.timestamp.date()} | {shares:4} shares @ ${execution_price:7.2f}{slippage_str} | Cash: ${self.cash:10,.2f}")
         return True
     
     def sell(self, bar: Bar) -> bool:
-        """Execute sell order"""
+        """Execute sell order with slippage"""
         if self.position_size <= 0:
             return False  # No position
-        
+
+        # Apply slippage to execution price
+        execution_price = self._apply_slippage(bar.close, "SELL")
+
         # Execute trade
-        proceeds = self.position_size * bar.close
+        proceeds = self.position_size * execution_price
         self.cash += proceeds
-        
+
         # Calculate trade PnL
-        pnl = (bar.close - self.entry_price) * self.position_size
-        return_pct = (bar.close - self.entry_price) / self.entry_price * 100
-        
+        pnl = (execution_price - self.entry_price) * self.position_size
+        return_pct = (execution_price - self.entry_price) / self.entry_price * 100
+
         # Record trade
         trade = Trade(
             entry_time=datetime.now(),  # Would need to store actual entry time
@@ -355,20 +371,35 @@ class SimpleBacktester:
             symbol=bar.symbol,
             side='LONG',
             entry_price=self.entry_price,
-            exit_price=bar.close,
+            exit_price=execution_price,
             quantity=self.position_size,
             pnl=pnl,
             return_pct=return_pct
         )
         self.trades.append(trade)
-        
-        print(f"🔴 SELL {bar.timestamp.date()} | {self.position_size:4} shares @ ${bar.close:7.2f} | PnL: ${pnl:8.2f} ({return_pct:+5.1f}%)")
-        
+
+        slippage_str = f" (slippage: {self.slippage_bps}bps)" if self.slippage_bps > 0 else ""
+        print(f"🔴 SELL {bar.timestamp.date()} | {self.position_size:4} shares @ ${execution_price:7.2f}{slippage_str} | PnL: ${pnl:8.2f} ({return_pct:+5.1f}%)")
+
         # Reset position
         self.position_size = 0
         self.entry_price = 0.0
-        
+
         return True
+
+    def _apply_slippage(self, price: float, side: str) -> float:
+        """Apply slippage to execution price"""
+        if self.slippage_bps == 0:
+            return price
+
+        slippage_factor = self.slippage_bps / 10000.0  # Convert basis points to decimal
+
+        if side == "BUY":
+            # For buys, we pay slightly more
+            return price * (1 + slippage_factor)
+        else:  # SELL
+            # For sells, we receive slightly less
+            return price * (1 - slippage_factor)
     
     def update_equity_curve(self, bar: Bar):
         """Update equity curve"""
@@ -381,7 +412,15 @@ class SimpleBacktester:
         
         print(f"\n📊 Starting backtest: {len(bars)} bars from {bars[0].timestamp.date()} to {bars[-1].timestamp.date()}")
         print(f"💰 Initial capital: ${self.initial_cash:,.2f}")
-        print(f"📏 Position size: {self.position_size_pct:.1%} of portfolio")
+
+        if self.position_notional:
+            print(f"📏 Position size: ${self.position_notional:,.2f} fixed notional")
+        else:
+            print(f"📏 Position size: {self.position_size_pct:.1%} of portfolio")
+
+        if self.slippage_bps > 0:
+            print(f"⚠️  Slippage: {self.slippage_bps} basis points ({self.slippage_bps/100:.2f}%)")
+
         print("-" * 80)
         
         for bar in bars:
@@ -527,6 +566,8 @@ def main():
     parser.add_argument("--csv", help="Load data from CSV file instead of Alpaca")
     parser.add_argument("--initial-cash", type=float, default=100000, help="Initial capital")
     parser.add_argument("--position-size", type=float, default=0.1, help="Position size as fraction of portfolio (0.1 = 10%)")
+    parser.add_argument("--position-notional", type=float, help="Fixed notional position size in USD (overrides --position-size)")
+    parser.add_argument("--slippage-bps", type=int, default=0, help="Slippage in basis points (e.g., 3 = 0.03%)")
     parser.add_argument("--signal-prob", type=float, default=0.05, help="Signal probability per bar (0.05 = 5%)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--plot", help="Save plot to file (e.g., results.png)")
@@ -565,7 +606,9 @@ def main():
         strategy = RandomStrategy(signal_probability=args.signal_prob, seed=args.seed)
         backtester = SimpleBacktester(
             initial_cash=args.initial_cash,
-            position_size_pct=args.position_size
+            position_size_pct=args.position_size,
+            position_notional=args.position_notional,
+            slippage_bps=args.slippage_bps
         )
         
         results = backtester.run_backtest(bars, strategy)

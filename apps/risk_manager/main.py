@@ -14,6 +14,7 @@ import os
 import sys
 import asyncio
 import logging
+import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
@@ -31,6 +32,10 @@ from lib.time_utils import (
     record_alpaca_call
 )
 from lib.deduplication import get_deduplication_service
+from lib.metrics_helpers import (
+    RiskManagerMetrics, BusMetrics, time_bus_processing,
+    start_metrics_server, find_available_port
+)
 
 # Configure logging
 logging.basicConfig(
@@ -184,10 +189,21 @@ class EnhancedRiskManager:
         self.settings = get_settings()
         self.bus = get_bus()
         self.running = False
-        
+
         # Initialize enhanced services
         self.deduplication = get_deduplication_service()
         self.market_validator = MarketHoursValidator()
+
+        # Initialize metrics
+        self.metrics = RiskManagerMetrics()
+
+        # Start metrics server
+        try:
+            metrics_port = int(os.getenv("RISK_METRICS_PORT", "8011"))
+            start_metrics_server(metrics_port)
+            logger.info(f"📊 Risk Manager metrics available at http://localhost:{metrics_port}/metrics")
+        except Exception as e:
+            logger.warning(f"Failed to start metrics server: {e}")
         
         # Rate limiters using monotonic time
         self.order_rate_limiter = RateLimitWindow(
@@ -393,17 +409,21 @@ class EnhancedRiskManager:
     async def process_signal(self, signal: Signal):
         """Process incoming signal with comprehensive validation"""
         self.signals_processed += 1
-        
+
         try:
             logger.info(f"Processing signal: {signal.side} {signal.symbol} (confidence: {signal.confidence:.1%}) from {signal.source}")
-            
+
             # Comprehensive validation
             is_valid, reason = self.validate_signal_comprehensive(signal)
-            
+
             if not is_valid:
                 self.signals_rejected += 1
                 logger.warning(f"Signal rejected: {reason}")
-                
+
+                # Record rejection metrics
+                self.metrics.signal_processed(signal.symbol, "rejected")
+                self.metrics.risk_check_failed("signal_validation", reason)
+
                 # Publish rejection event
                 self.bus.publish_system_event(
                     event_type="signal_rejected",
@@ -416,11 +436,11 @@ class EnhancedRiskManager:
                         "confidence": float(signal.confidence)
                     }
                 )
-                
+
                 # Record rejection in circuit breaker if it's a validation error
                 if "validation" in reason.lower():
                     self.circuit_breakers["risk_validation"].record_error(reason)
-                
+
                 return
             
             # Mark signal as processed (persistent deduplication)
@@ -452,12 +472,15 @@ class EnhancedRiskManager:
             
             # Publish order intent
             self.bus.publish_order_intent(order_intent)
-            
+
             self.signals_approved += 1
             self.orders_created += 1
-            
+
+            # Record approval metrics
+            self.metrics.signal_processed(signal.symbol, "approved")
+
             logger.info(f"✅ Signal approved and order created: {order_intent.client_order_id}")
-            
+
             # Publish approval event
             self.bus.publish_system_event(
                 event_type="signal_approved",
@@ -491,18 +514,52 @@ class EnhancedRiskManager:
             )
     
     async def consume_signals(self):
-        """Consume signals from message bus"""
+        """Consume signals from message bus with Streams-optimized processing"""
         logger.info("Starting enhanced signal processing...")
-        
-        async for signal in self.bus.subscribe_signals():
-            if not self.running:
-                break
-                
-            try:
-                await self.process_signal(signal)
-            except Exception as e:
-                logger.error(f"Error in signal consumption loop: {e}")
-                await asyncio.sleep(1)  # Brief pause on error
+
+        # Check if we're using Streams backend for optimized consumption
+        if hasattr(self.bus.backend, 'consume_with_handler') and self.bus.get_stats().get('backend') == 'streams':
+            logger.info("Using Redis Streams optimized consumption with safe ACK pattern")
+
+            async def signal_handler(msg_data: dict) -> bool:
+                """Handler for Streams-based signal processing"""
+                try:
+                    if not self.running:
+                        return False
+
+                    # Parse signal from message data
+                    if msg_data.get("type") != "signal":
+                        return True  # ACK non-signal messages
+
+                    signal_data = json.loads(msg_data["data"])
+                    signal = Signal.model_validate(signal_data)
+
+                    # Process the signal
+                    await self.process_signal(signal)
+
+                    # Return True to ACK the message (only after successful processing)
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Error processing signal in handler: {e}")
+                    # Return False to NOT ACK the message (it will remain pending for retry)
+                    return False
+
+            # Use the safe Streams consumption pattern
+            await self.bus.backend.consume_with_handler("signals", signal_handler)
+
+        else:
+            # Fallback to Pub/Sub pattern for backward compatibility
+            logger.info("Using Pub/Sub consumption pattern")
+            async for signal in self.bus.subscribe_signals():
+                if not self.running:
+                    break
+
+                try:
+                    await self.process_signal(signal)
+                except Exception as e:
+                    logger.error(f"Error in signal consumption loop: {e}")
+                    await asyncio.sleep(1)  # Brief pause on error
     
     def get_comprehensive_stats(self) -> Dict:
         """Get comprehensive risk manager statistics"""
@@ -547,6 +604,9 @@ class EnhancedRiskManager:
             logger.error("Failed to connect to message bus")
             return False
         
+        # Mark service start in metrics
+        self.metrics.mark_service_start()
+
         # Publish service start event
         self.bus.publish_system_event(
             event_type="service_start",
@@ -554,18 +614,20 @@ class EnhancedRiskManager:
             data={
                 "enhanced_features": [
                     "timezone_aware_validation",
-                    "monotonic_rate_limiting", 
+                    "monotonic_rate_limiting",
                     "persistent_deduplication",
                     "circuit_breakers",
-                    "comprehensive_logging"
+                    "comprehensive_logging",
+                    "prometheus_metrics"
                 ],
                 "rate_limits": {
                     "orders_per_minute": self.settings.max_orders_per_minute,
                     "signals_per_5min": self.settings.max_signals_per_5min
-                }
+                },
+                "metrics_port": os.getenv("RISK_METRICS_PORT", "8011")
             }
         )
-        
+
         self.running = True
         
         try:
@@ -583,16 +645,19 @@ class EnhancedRiskManager:
         """Stop enhanced risk manager"""
         logger.info("Stopping Enhanced Risk Manager...")
         self.running = False
-        
+
+        # Mark service stop in metrics
+        self.metrics.mark_service_stop()
+
         # Get final stats
         final_stats = self.get_comprehensive_stats()
-        
+
         logger.info("Final Statistics:")
         logger.info(f"  Signals processed: {self.signals_processed}")
         logger.info(f"  Signals approved: {self.signals_approved}")
         logger.info(f"  Approval rate: {final_stats['performance']['approval_rate']:.1%}")
         logger.info(f"  Orders created: {self.orders_created}")
-        
+
         # Publish service stop event
         if self.bus:
             self.bus.publish_system_event(

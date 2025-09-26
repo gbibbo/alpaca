@@ -2,6 +2,16 @@
 
 A comprehensive, microservices-based algorithmic trading platform built with Python, featuring real-time market data ingestion, historical data simulation, intelligent trading strategies, robust risk management, rapid backtesting capabilities, and enterprise-grade monitoring and observability.
 
+## 🆕 Recent Improvements
+
+- **✨ Redis Streams Backend**: Primary message delivery system with consumer groups and automatic recovery
+- **📈 Prometheus Integration**: Comprehensive metrics collection on dedicated port 8013
+- **🔄 Intelligent Fallbacks**: Seamless fallback chain (Streams → Pub/Sub → FakeRedis)
+- **🕰️ Redis 6.0 Support**: Compatible with Redis 6.0+ with feature detection
+- **📊 Enhanced Backtesting**: Realistic modeling with slippage, costs, and visual results
+- **🚑 Smoke Testing**: Quick 3-terminal setup verification with GOOGL example
+- **🔍 Business Metrics**: Signal approval rates, risk violations, and portfolio tracking
+
 ## 🏗️ Architecture
 
 ```
@@ -43,7 +53,9 @@ The platform implements a distributed architecture where each component communic
 - **Historical Data Simulation**: Replays historical market data through the message bus at configurable speeds
 - **IEX Feed Support**: Uses Alpaca's IEX data feed, compatible with free paper trading accounts
 - **CSV Data Support**: Loads and processes historical data from CSV files for offline testing
-- **Redis Streams Integration**: Publishes market data through reliable message streaming with fallback support
+- **Redis Streams Integration**: Primary message backend using Redis Streams with consumer groups for guaranteed delivery
+- **Automatic Fallbacks**: Intelligent fallback chain: Redis Streams → Redis Pub/Sub → FakeRedis
+- **Redis 6.0+ Support**: Compatible with Redis 6.0+ with automatic feature detection
 
 ### Trading Strategy Engine
 - **Multiple Strategy Support**: Implements both random and technical analysis-based trading strategies
@@ -70,13 +82,17 @@ The platform implements a distributed architecture where each component communic
 - **Performance Metrics**: Comprehensive backtesting metrics including Sharpe ratio, maximum drawdown, and win rates
 - **Data Flexibility**: Supports both Alpaca API data and CSV file inputs for testing
 - **Configurable Speed**: Variable replay speeds for efficient historical simulation
+- **Visual Results**: Automatic chart generation with performance plots saved to `out/` directory
+- **Realistic Trading**: Includes notional values, slippage modeling, and transaction costs
 
 ### Monitoring & Observability
-- **Prometheus Metrics**: Comprehensive system and business metrics collection
+- **Prometheus Metrics**: Comprehensive system and business metrics collection on port 8013
 - **Grafana Dashboards**: Real-time visualization and alerting capabilities
 - **Health Monitoring**: Automated health checks for all services with detailed status reporting
 - **Service Logging**: Individual log files for each service component
 - **Real-time Dashboard**: WebSocket-based live trading dashboard
+- **Message Bus Metrics**: Stream length, consumer lag, pending messages, and throughput monitoring
+- **Business Metrics**: Signal generation, order execution, portfolio value, and P&L tracking
 
 ### Service Management
 - **Control System**: Comprehensive service management through `scripts/control.py`
@@ -88,11 +104,16 @@ The platform implements a distributed architecture where each component communic
 ## 📋 Prerequisites
 
 - Python 3.9+
-- Redis Server (optional - automatic FakeRedis fallback available)
+- Redis Server 6.0+ (optional - automatic FakeRedis fallback available)
 - Alpaca Markets Account (Paper Trading) - optional for CSV-based testing
 - `lsof` utility (recommended)
 - 8GB RAM minimum
-- Linux/macOS/WSL2
+- Linux/macOS/WSL2/Windows
+
+### Redis Compatibility
+- **Redis 6.2+**: Full feature support including `XAUTOCLAIM` for automatic message recovery
+- **Redis 6.0-6.1**: Compatible with manual consumer group management (automatic recovery disabled)
+- **No Redis**: Automatic FakeRedis fallback for development
 
 ## 🛠️ Installation
 
@@ -139,8 +160,14 @@ HISTORICAL_DAYS=7
 RISK_PCT=0.02
 
 # Message Bus Configuration
-BUS_BACKEND=streams  # or 'pubsub'
-USE_FAKE_REDIS=0     # Set to 1 to force FakeRedis
+BUS_BACKEND=streams        # 'streams' (preferred) or 'pubsub'
+REDIS_URL=redis://127.0.0.1:6379
+REDIS_DB=0
+BUS_GROUP=trader          # Consumer group name for streams
+USE_FAKE_REDIS=0          # Set to 1 to force FakeRedis
+
+# Metrics Configuration
+RISK_METRICS_PORT=8013    # Prometheus metrics port
 ```
 
 ### 4. Infrastructure Setup
@@ -155,6 +182,51 @@ python scripts/setup_infrastructure.py
 
 ## 🚀 Quick Start
 
+### Smoke Test (Recommended First Step)
+
+Verify your system setup with this simple 3-terminal test:
+
+**Terminal A - Risk Manager:**
+```bash
+export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379 REDIS_DB=0 BUS_GROUP=trader RISK_METRICS_PORT=8013
+python apps/risk_manager/main.py
+```
+
+**Terminal B - Executor:**
+```bash
+export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379 REDIS_DB=0 BUS_GROUP=trader
+python apps/executor/main.py
+```
+
+**Terminal C - Publish Test Signal:**
+```bash
+export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379 REDIS_DB=0
+python -c "
+from lib.bus import connect_bus, get_bus
+from lib.models import Signal, SignalSide
+from decimal import Decimal
+connect_bus(); bus = get_bus()
+sig = Signal(symbol='GOOGL', side=SignalSide.BUY, confidence=Decimal('0.9'), price=Decimal('151.00'), source='smart_technical')
+bus.publish_signal(sig)
+print('Signal published')
+"
+```
+
+**Expected Output:**
+- Risk Manager: `✅ Signal approved and order created: GOOGL BUY confidence=0.9`
+- Executor: `Received order intent: GOOGL BUY qty=65 notional=9965.00`
+- Prometheus metrics: http://127.0.0.1:8013/metrics
+- Stream status: `Backend: streams`, `RedisStreamsBus health: OK`
+
+### Redis 6.0 Troubleshooting
+
+If you encounter issues with consumer groups on Redis 6.0:
+```bash
+# Reset consumer group (if needed)
+redis-cli XGROUP DESTROY orders.intent order_processors
+redis-cli XGROUP CREATE orders.intent order_processors "$" MKSTREAM
+```
+
 ### Rapid Strategy Testing
 
 Test trading strategies quickly without full system setup:
@@ -162,24 +234,32 @@ Test trading strategies quickly without full system setup:
 ```bash
 # Quick backtest with real Alpaca data (requires credentials)
 python scripts/sim_random.py \
-  --symbol AAPL \
+  --symbol GOOGL \
   --start 2022-01-01 \
   --end 2024-01-01 \
   --initial-cash 100000 \
-  --position-size 0.1 \
+  --position-notional 10000 \
   --signal-prob 0.02 \
-  --no-plot
+  --seed 42
 
-# Backtest with CSV data
+# Backtest with realistic slippage and costs
 python scripts/sim_random.py \
-  --symbol AAPL \
-  --start 2022-01-01 \
+  --symbol GOOGL \
+  --start 2023-01-01 \
   --end 2024-01-01 \
-  --csv data/csv/AAPL.csv \
   --initial-cash 100000 \
-  --position-size 0.1 \
-  --signal-prob 0.02
+  --position-notional 10000 \
+  --signal-prob 0.05 \
+  --slippage-bps 3 \
+  --plot out/GOOGL.png
 ```
+
+**Features:**
+- **Visual Results**: Generates performance charts in `out/GOOGL.png`
+- **Realistic Modeling**: Includes slippage, transaction costs, and notional values
+- **Performance Metrics**: Sharpe ratio, max drawdown, total return, win rate
+- **Data Sources**: Supports Alpaca API or CSV files
+- **Risk Management**: Position sizing and stop-loss simulation
 
 ### Historical Data Simulation
 
@@ -257,7 +337,8 @@ tail -f logs/data_ingestor.log
 | **Trading API** | http://127.0.0.1:8000 | None | REST API and system monitoring |
 | **API Documentation** | http://127.0.0.1:8000/docs | None | Interactive API documentation |
 | **Live Dashboard** | http://127.0.0.1:8000/dashboard | None | Real-time trading dashboard |
-| **Prometheus** | http://127.0.0.1:9090 | None | System metrics and monitoring |
+| **Prometheus (Global)** | http://127.0.0.1:9090 | None | System-wide metrics collection |
+| **Risk Manager Metrics** | http://127.0.0.1:8013/metrics | None | Trading-specific Prometheus metrics |
 | **Grafana** | http://127.0.0.1:3000 | admin / trading123 | Advanced dashboard and alerting |
 
 ## 🏗️ System Components
@@ -323,12 +404,13 @@ Quick strategy validation tool:
 
 ### Message Bus (`lib/bus.py`)
 Redis-based message communication with intelligent fallbacks:
-- Redis Streams for reliable message delivery with consumer groups
-- Automatic fallback to Redis Pub/Sub for compatibility
-- Further fallback to FakeRedis for development without Redis server
-- Message replay capability for debugging and recovery
-- Safe message acknowledgment after processing
-- Consumer group management and pending message recovery
+- **Redis Streams** (primary): Reliable message delivery with consumer groups and automatic recovery
+- **Redis Pub/Sub** (fallback): Compatible with older Redis versions
+- **FakeRedis** (development): In-memory Redis simulation for testing
+- **Smart Recovery**: Automatic handling of pending messages (Redis 6.2+) or manual reset for Redis 6.0
+- **Consumer Groups**: Distributed message processing with load balancing
+- **Message Persistence**: Durable message storage with replay capability
+- **Health Monitoring**: Built-in connection health checks and automatic reconnection
 
 ## 🔧 Configuration
 
@@ -409,35 +491,54 @@ The control system performs comprehensive health checking:
 Track message flow and system health:
 ```bash
 # Monitor Redis Streams (if using Redis Streams)
-redis-cli XINFO GROUPS trading:signals
-redis-cli XLEN trading:bars
-redis-cli XINFO CONSUMERS trading:signals signal_processors
+redis-cli XINFO GROUPS signals
+redis-cli XLEN bars
+redis-cli XINFO CONSUMERS signals signal_processors
 
 # Check message bus health
 curl -s http://127.0.0.1:8000/health | jq '.message_bus'
 ```
 
 ### Prometheus Metrics
-Key metrics collected include:
-```promql
-# System health
-trading_system_health{component="api"}
 
-# Data pipeline
-trading_stream_length{stream_name="trading:bars"}
-trading_messages_published_total
-trading_messages_consumed_total
-trading_messages_acked_total
+The Risk Manager exposes comprehensive metrics on port 8013:
 
-# Business metrics
-trading_signals_generated_total
-trading_orders_submitted_total
-trading_portfolio_value_usd
-
-# Performance metrics
-trading_redis_latency_ms
-http_request_duration_seconds
+**Access Metrics:**
+```bash
+curl http://127.0.0.1:8013/metrics
 ```
+
+**Key Metrics Collected:**
+```promql
+# Stream Health and Performance
+redis_streams_length{stream="signals"}              # Pending messages
+redis_streams_consumers{group="signal_processors"}   # Active consumers
+redis_streams_pending{group="signal_processors"}     # Unacked messages
+redis_streams_lag{group="signal_processors"}         # Consumer lag
+
+# Business Metrics
+signals_received_total{source="smart_technical"}     # Signals by source
+signals_approved_total{symbol="GOOGL"}               # Approved signals
+signals_rejected_total{reason="market_hours"}        # Rejection reasons
+order_intents_published_total{symbol="GOOGL"}        # Orders sent
+
+# Risk Metrics
+risk_checks_total{check="market_hours"}              # Risk check counts
+risk_violations_total{type="position_limit"}         # Risk violations
+portfolio_value_usd{account="paper"}                 # Portfolio value
+position_size{symbol="GOOGL"}                        # Position sizes
+
+# System Performance
+redis_operation_duration_seconds{operation="xadd"}   # Redis latency
+message_processing_duration_seconds{type="signal"}   # Processing time
+system_uptime_seconds                                 # Service uptime
+```
+
+**Grafana Integration:**
+- Pre-configured dashboards available
+- Real-time alerts on system health
+- Business metrics visualization
+- Performance monitoring
 
 ### Grafana Dashboards
 Pre-configured dashboards for:
@@ -467,19 +568,21 @@ logs/
 ```bash
 # Test with synthetic data
 python scripts/sim_random.py \
-  --symbol AAPL \
+  --symbol GOOGL \
   --start 2022-01-01 \
   --end 2024-01-01 \
   --initial-cash 100000 \
-  --position-size 0.1 \
-  --signal-prob 0.05
+  --position-notional 10000 \
+  --signal-prob 0.05 \
+  --seed 42
 
-# Test with real market data
+# Test with CSV data (alternative to --position-notional)
 python scripts/sim_random.py \
-  --symbol AAPL \
+  --symbol GOOGL \
   --start 2023-01-01 \
   --end 2023-12-31 \
-  --csv data/csv/AAPL.csv \
+  --csv data/csv/GOOGL.csv \
+  --position-size 0.1 \
   --output backtest_results.json
 ```
 
@@ -564,11 +667,17 @@ mkdir -p data/csv
 
 ### Message Bus Issues
 ```bash
-# Check Redis status
+# Check Redis status and version
 redis-cli info server
+redis-cli --version
 
 # Monitor message flow
 redis-cli MONITOR
+
+# Check Redis Streams (Redis 6.0+)
+redis-cli XINFO GROUPS signals
+redis-cli XINFO CONSUMERS signals signal_processors
+redis-cli XLEN signals
 
 # Force Pub/Sub fallback
 export BUS_BACKEND=pubsub
@@ -576,6 +685,48 @@ export BUS_BACKEND=pubsub
 # Use FakeRedis for development
 export USE_FAKE_REDIS=1
 ```
+
+### Redis 6.0 Compatibility Issues
+
+**Problem**: `XAUTOCLAIM` command not available in Redis 6.0-6.1
+```
+ERROR: Redis command XAUTOCLAIM not supported
+```
+
+**Note**: La plataforma detecta automáticamente Redis < 6.2 y desactiva la recuperación automática de pendientes (seguirá funcionando). Se recomienda actualizar a 6.2+ para habilitarla.
+
+**Solutions**:
+1. **Upgrade Redis** (Recommended):
+   ```bash
+   # Ubuntu/Debian
+   sudo apt update && sudo apt install redis-server
+
+   # macOS
+   brew upgrade redis
+
+   # Docker
+   docker run -p 6379:6379 redis:7-alpine
+   ```
+
+2. **Reset Consumer Group** (Redis 6.0 workaround):
+   ```bash
+   redis-cli XGROUP DESTROY signals signal_processors
+   redis-cli XGROUP DESTROY orders.intent order_processors
+   redis-cli XGROUP CREATE signals signal_processors "$" MKSTREAM
+   redis-cli XGROUP CREATE orders.intent order_processors "$" MKSTREAM
+   ```
+
+3. **Use Pub/Sub Backend**:
+   ```bash
+   export BUS_BACKEND=pubsub
+   ```
+
+**Feature Comparison**:
+| Redis Version | Streams Support | Auto Recovery | Recommended |
+|---------------|----------------|---------------|-------------|
+| 6.2+ | ✅ Full | ✅ Yes | ✅ |
+| 6.0-6.1 | ⚠️ Limited | ❌ Manual | ⚠️ |
+| < 6.0 | ❌ No | ❌ No | ❌ |
 
 ### TimeFrame Mapping Issues
 Supported timeframes for Alpaca API:
@@ -623,9 +774,14 @@ python apps/simulator/main.py --speed 0.1  # Very slow simulation
 The system publishes various event types through Redis:
 - `bars` - Market data bars
 - `signals` - Trading signals
-- `orders` - Order intentions  
-- `fills` - Order execution results
+- `orders.intent` - Order intentions
+- `orders.fill` - Order execution results
 - `system` - System events and status updates
+
+**Consumer Groups:**
+- `signal_processors` - Processes trading signals (Risk Manager)
+- `order_processors` - Processes order intents (Executor)
+- `bar_processors` - Processes market data (Strategies)
 
 ## 🔒 Security
 

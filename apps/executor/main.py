@@ -13,6 +13,7 @@ import os
 import sys
 import asyncio
 import logging
+import json
 import random
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple
@@ -599,35 +600,84 @@ class EnhancedAlpacaExecutor:
             logger.error(f"Error processing order update: {e}")
     
     async def consume_order_intents(self):
-        """Consume order intents from message bus with deduplication"""
+        """Consume order intents from message bus with Streams-optimized processing"""
         logger.info("Starting enhanced order intent processing...")
-        
-        async for order_intent in self.bus.subscribe_order_intents():
-            if not self.running:
-                break
-            
-            try:
-                logger.info(f"Received order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
-                
-                # Check for duplicate processing
-                if self.deduplication.is_order_processed(order_intent):
-                    logger.debug(f"Order intent already processed: {order_intent.client_order_id}")
-                    continue
-                
-                # Execute order
-                order_fill = await self.execute_order_with_validation(order_intent)
-                
-                if order_fill:
-                    # Mark fill as processed and publish
-                    if self.deduplication.mark_fill_processed(order_fill):
-                        self.bus.publish_order_fill(order_fill)
-                        logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.quantity}@${order_fill.fill_price:.2f}")
-                    else:
-                        logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
-                
-            except Exception as e:
-                logger.error(f"Error processing order intent: {e}")
-                await asyncio.sleep(1)  # Brief pause on error
+
+        # Check if we're using Streams backend for optimized consumption
+        if hasattr(self.bus.backend, 'consume_with_handler') and self.bus.get_stats().get('backend') == 'streams':
+            logger.info("Using Redis Streams optimized consumption with safe ACK pattern")
+
+            async def order_handler(msg_data: dict) -> bool:
+                """Handler for Streams-based order intent processing"""
+                try:
+                    if not self.running:
+                        return False
+
+                    # Parse order intent from message data
+                    if msg_data.get("type") != "order_intent":
+                        return True  # ACK non-order messages
+
+                    order_data = json.loads(msg_data["data"])
+                    order_intent = OrderIntent.model_validate(order_data)
+
+                    logger.info(f"Received order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
+
+                    # Check for duplicate processing
+                    if self.deduplication.is_order_processed(order_intent):
+                        logger.debug(f"Order intent already processed: {order_intent.client_order_id}")
+                        return True  # ACK duplicate orders
+
+                    # Execute order
+                    order_fill = await self.execute_order_with_validation(order_intent)
+
+                    if order_fill:
+                        # Mark fill as processed and publish
+                        if self.deduplication.mark_fill_processed(order_fill):
+                            self.bus.publish_order_fill(order_fill)
+                            logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.quantity}@${order_fill.fill_price:.2f}")
+                        else:
+                            logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
+
+                    # Return True to ACK the message (only after successful processing)
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Error processing order intent in handler: {e}")
+                    # Return False to NOT ACK the message (it will remain pending for retry)
+                    return False
+
+            # Use the safe Streams consumption pattern
+            await self.bus.backend.consume_with_handler("orders", order_handler)
+
+        else:
+            # Fallback to Pub/Sub pattern for backward compatibility
+            logger.info("Using Pub/Sub consumption pattern")
+            async for order_intent in self.bus.subscribe_order_intents():
+                if not self.running:
+                    break
+
+                try:
+                    logger.info(f"Received order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
+
+                    # Check for duplicate processing
+                    if self.deduplication.is_order_processed(order_intent):
+                        logger.debug(f"Order intent already processed: {order_intent.client_order_id}")
+                        continue
+
+                    # Execute order
+                    order_fill = await self.execute_order_with_validation(order_intent)
+
+                    if order_fill:
+                        # Mark fill as processed and publish
+                        if self.deduplication.mark_fill_processed(order_fill):
+                            self.bus.publish_order_fill(order_fill)
+                            logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.quantity}@${order_fill.fill_price:.2f}")
+                        else:
+                            logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
+
+                except Exception as e:
+                    logger.error(f"Error processing order intent: {e}")
+                    await asyncio.sleep(1)  # Brief pause on error
     
     def get_comprehensive_stats(self) -> Dict:
         """Get comprehensive executor statistics"""
