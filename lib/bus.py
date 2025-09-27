@@ -428,8 +428,15 @@ class MessageBus:
 
     async def subscribe_system_events(self, event_type: str = "*") -> AsyncGenerator[MessageEvent, None]:
         """Subscribe to system events"""
-        async for event in self.backend.subscribe_system_events(event_type):
-            yield event
+        agen = self.backend.subscribe_system_events(event_type)
+        try:
+            async for event in agen:
+                yield event
+        finally:
+            try:
+                await agen.aclose()  # Ensure proper cleanup of backend generator
+            except Exception:
+                pass
 
     def connect(self):
         """Connect to Redis"""

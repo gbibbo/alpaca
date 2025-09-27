@@ -1,0 +1,378 @@
+nohup: ignoring input
+2025-09-27 01:06:23,565 - lib.bus - INFO - Connected to real Redis: redis://localhost:6379/0
+2025-09-27 01:06:23,588 - lib.bus_streams - INFO - RedisStreamsBus initialized with consumer_id: AI4S_3028_1758931583
+2025-09-27 01:06:23,589 - lib.bus - INFO - MessageBus initialized with streams backend
+2025-09-27 01:06:23,592 - lib.bus_streams - INFO - RedisStreamsBus connected successfully
+2025-09-27 01:06:23,594 - __main__ - INFO - Random50Strategy initialized with seed: 42
+2025-09-27 01:06:23,596 - lib.metrics_helpers - INFO - ✅ Prometheus metrics server started on port 8013
+2025-09-27 01:06:23,598 - lib.metrics_helpers - INFO - 📊 Metrics available at: http://localhost:8013/metrics
+2025-09-27 01:06:23,599 - __main__ - INFO - 📊 Strategies metrics available at http://localhost:8013/metrics
+2025-09-27 01:06:23,600 - __main__ - INFO - Initialized strategy engine with 2 strategies
+2025-09-27 01:06:23,600 - __main__ - INFO - Tracking symbols: ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA']
+2025-09-27 01:06:23,601 - __main__ - INFO - Starting Strategy Engine...
+2025-09-27 01:06:23,604 - lib.bus - INFO - Connected to real Redis: redis://localhost:6379/0
+2025-09-27 01:06:23,604 - lib.bus_streams - INFO - RedisStreamsBus initialized with consumer_id: AI4S_3028_1758931583
+2025-09-27 01:06:23,605 - lib.bus - INFO - MessageBus initialized with streams backend
+2025-09-27 01:06:23,607 - lib.bus_streams - INFO - RedisStreamsBus connected successfully
+2025-09-27 01:06:23,607 - lib.metrics_helpers - INFO - 📊 Service strategy_random_50_50 metrics initialized
+2025-09-27 01:06:23,608 - lib.metrics_helpers - INFO - 📊 Service strategy_smart_technical metrics initialized
+2025-09-27 01:06:23,608 - __main__ - INFO - Starting to consume market bars...
+2025-09-27 01:06:23,610 - __main__ - INFO - Using Redis Streams optimized consumption with safe ACK pattern
+2025-09-27 01:06:23,610 - lib.bus_streams - INFO - Starting safe consumption of bars stream
+2025-09-27 01:06:23,613 - lib.bus_streams - INFO - Redis 6.0.16 - XAUTOCLAIM support: False
+2025-09-27 01:06:23,625 - __main__ - INFO - Starting to consume strategy configuration events...
+2025-09-27 01:06:23,638 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.7144257221107816, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,647 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.7113533988295048, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,649 - lib.bus_streams - INFO - Reclaimed 5 pending system events
+2025-09-27 01:06:23,654 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.5481838824139476, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,656 - __main__ - INFO - Processing strategy config from smoke
+2025-09-27 01:06:23,663 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,666 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,667 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,668 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,669 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,670 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,671 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,672 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,673 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,674 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,675 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,677 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,678 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,679 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,680 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,681 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,682 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,682 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,683 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,685 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,686 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,689 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,690 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,691 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,692 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,694 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,695 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,696 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,697 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,698 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,700 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,703 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,704 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,705 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,706 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,707 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,709 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,710 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,711 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,713 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,715 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,719 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,720 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,722 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,723 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,724 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,725 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,726 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,727 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,728 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,729 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,730 - __main__ - INFO - Processed 100 bars, generated 0 signals
+2025-09-27 01:06:23,734 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,735 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,737 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.6798828535242998, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,738 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,739 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,740 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.6867560756635982, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,741 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,742 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,743 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,744 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,745 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,746 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,749 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,750 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,751 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,753 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,754 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,755 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,756 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,758 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,759 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,760 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,764 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,766 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,767 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,769 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,770 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,772 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,773 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,774 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,776 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,778 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,782 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,783 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,785 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,786 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,787 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,789 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.7130940909001146, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,790 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,792 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,793 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,794 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,796 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,799 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,801 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,804 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,805 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,807 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,808 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,810 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,811 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,812 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,814 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,817 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,819 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,821 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,822 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,823 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,825 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,826 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,828 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,829 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,830 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,833 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,835 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,836 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,837 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,839 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,840 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,842 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.6060228516926859, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,843 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,844 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,845 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,847 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,850 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,852 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,853 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.6994432077827797, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,854 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,855 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,856 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,858 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,860 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,861 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,863 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,864 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,867 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,867 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,868 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,869 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,869 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,870 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,872 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,873 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,875 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,876 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,879 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,881 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,884 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,886 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,888 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.45755900102050034, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,889 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,890 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,892 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,893 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,893 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,894 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,895 - __main__ - INFO - Processed 200 bars, generated 0 signals
+2025-09-27 01:06:23,897 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,899 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,900 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,901 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,902 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,902 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,903 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,904 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,905 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,906 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,909 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,911 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,912 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,913 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,915 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.7699233717248108, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,916 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,918 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,919 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,921 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,922 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,922 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,925 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,926 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.7732092886400845, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:23,927 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,928 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,928 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,931 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,932 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,934 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,936 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,938 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,939 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,943 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,946 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,948 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,949 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,950 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,952 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,953 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,954 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,955 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,957 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,961 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,962 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,963 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,965 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,967 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,968 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,970 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,971 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,973 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,975 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,978 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,979 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,981 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,982 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,984 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,985 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,987 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,988 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,989 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,990 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,994 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,996 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,997 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:23,998 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,000 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,001 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,002 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,003 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,004 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,005 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,009 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,010 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,011 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,012 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,013 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,015 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,016 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,016 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,017 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,018 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,021 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,022 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,023 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,023 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.7117910163085316, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:24,024 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,025 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,025 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,026 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,027 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,028 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,029 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,033 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,034 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,036 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,037 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,038 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,039 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,039 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,040 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,041 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,041 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,042 - __main__ - INFO - Processed 300 bars, generated 0 signals
+2025-09-27 01:06:24,045 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,046 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,048 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,049 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,050 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,051 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,052 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,054 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,055 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,056 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,059 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,060 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,060 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,061 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,062 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,063 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,063 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,064 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,066 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,067 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,069 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,070 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,071 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,073 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,074 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,076 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,076 - __main__ - ERROR - Error in strategy random_50_50 for GOOGL: 1 validation error for Signal
+confidence
+  Decimal input should have no more than 3 decimal places [type=decimal_max_places, input_value=0.6374728017865416, input_type=float]
+    For further information visit https://errors.pydantic.dev/2.11/v/decimal_max_places
+2025-09-27 01:06:24,077 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,077 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,078 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,079 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,081 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,082 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,082 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,083 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,084 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,086 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,087 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,088 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,090 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,091 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,094 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,095 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,095 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,096 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,098 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,099 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'
+2025-09-27 01:06:24,100 - __main__ - ERROR - Error in strategy smart_technical for GOOGL: unsupported operand type(s) for *: 'float' and 'decimal.Decimal'

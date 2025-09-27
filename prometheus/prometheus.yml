@@ -1,0 +1,66 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "/etc/prometheus/alerts/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Trading system services
+  - job_name: 'trading-market-data'
+    static_configs:
+      - targets: ['host.docker.internal:8011']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'trading-strategies'
+    static_configs:
+      - targets: ['host.docker.internal:8012']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'trading-executor'
+    static_configs:
+      - targets: ['host.docker.internal:8013']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'trading-pnl-aggregator'
+    static_configs:
+      - targets: ['host.docker.internal:8014']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'trading-risk-manager'
+    static_configs:
+      - targets: ['host.docker.internal:8015']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'trading-api'
+    static_configs:
+      - targets: ['host.docker.internal:8016']
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  # Infrastructure monitoring
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node exporter for system metrics (optional)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['host.docker.internal:9100']
+    scrape_interval: 30s

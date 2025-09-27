@@ -9,6 +9,7 @@ import os
 import asyncio
 import logging
 import sys
+import json
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -22,6 +23,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from lib.models import Bar, Signal, SignalSide
 from lib.bus import get_bus, connect_bus
 from lib.settings import get_settings
+from lib.metrics_helpers import (
+    StrategyMetrics, start_metrics_server, find_available_port,
+    time_bus_processing
+)
 
 # Configure logging
 logging.basicConfig(
@@ -92,10 +97,12 @@ class TechnicalIndicators:
 
 class Random50Strategy:
     """Random 50/50 strategy for infrastructure testing"""
-    
-    def __init__(self):
+
+    def __init__(self, seed: Optional[int] = 42):
         self.name = "random_50_50"
-        np.random.seed(42)  # For reproducible results
+        self.rng = np.random.default_rng(seed)  # Use numpy RNG for better control
+        self.seed = seed
+        logger.info(f"Random50Strategy initialized with seed: {seed}")
     
     def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
         """Generate random BUY/SELL signals"""
@@ -105,9 +112,9 @@ class Random50Strategy:
         latest_bar = bars[-1]
         
         # Random decision
-        if np.random.random() > 0.95:  # 5% chance of signal per bar
-            side = SignalSide.BUY if np.random.random() > 0.5 else SignalSide.SELL
-            confidence = np.random.uniform(0.4, 0.8)
+        if self.rng.random() > 0.95:  # 5% chance of signal per bar
+            side = SignalSide.BUY if self.rng.random() > 0.5 else SignalSide.SELL
+            confidence = self.rng.uniform(0.4, 0.8)
             
             return Signal(
                 symbol=symbol,
@@ -122,8 +129,14 @@ class Random50Strategy:
                     "latest_price": latest_bar.close
                 }
             )
-        
+
         return None
+
+    def set_seed(self, seed: int):
+        """Update the random seed for reproducible results"""
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
+        logger.info(f"Random50Strategy seed updated to: {seed}")
 
 class SmartTechnicalStrategy:
     """Technical analysis strategy using multiple indicators"""
@@ -243,7 +256,30 @@ class StrategyEngine:
             Random50Strategy(),
             SmartTechnicalStrategy()
         ]
-        
+
+        # Initialize metrics for each strategy
+        self.strategy_metrics = {}
+        for strategy in self.strategies:
+            self.strategy_metrics[strategy.name] = StrategyMetrics(strategy.name)
+
+        # Start metrics server
+        try:
+            metrics_port = int(os.getenv("STRATEGIES_METRICS_PORT", "8013"))
+            start_metrics_server(metrics_port)
+            logger.info(f"📊 Strategies metrics available at http://localhost:{metrics_port}/metrics")
+        except OSError as e:
+            if getattr(e, "errno", None) == 98:  # Address already in use
+                try:
+                    metrics_port = find_available_port(metrics_port + 1)
+                    start_metrics_server(metrics_port)
+                    logger.warning(f"Metrics port busy. Using fallback http://localhost:{metrics_port}/metrics")
+                except Exception as fallback_error:
+                    logger.warning(f"Failed to start metrics server on fallback port: {fallback_error}")
+            else:
+                logger.warning(f"Failed to start metrics server: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to start metrics server: {e}")
+
         # Bar storage for each symbol
         self.bar_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
         
@@ -286,9 +322,17 @@ class StrategyEngine:
                         key = f"{bar.symbol}_{strategy.name}"
                         self.last_signal_time[key] = datetime.utcnow()
                         
+                        # Record signal generation metrics
+                        if strategy.name in self.strategy_metrics:
+                            self.strategy_metrics[strategy.name].signal_generated(
+                                symbol=signal.symbol,
+                                side=signal.side.value,
+                                source=strategy.name
+                            )
+
                         # Publish signal
                         self.bus.publish_signal(signal)
-                        
+
                         logger.info(
                             f"Generated signal: {signal.side} {signal.symbol} "
                             f"(confidence: {signal.confidence:.2%}) from {strategy.name}"
@@ -312,29 +356,109 @@ class StrategyEngine:
         
         except Exception as e:
             logger.error(f"Error processing bar for {bar.symbol}: {e}")
+
+    def handle_strategy_config(self, event_data: dict):
+        """Handle strategy configuration events (e.g., seed updates)"""
+        try:
+            if event_data.get("config_type") == "reproducible_mode":
+                seed = event_data.get("random_seed")
+                if seed is not None:
+                    logger.info(f"Updating strategy seeds to: {seed}")
+                    for strategy in self.strategies:
+                        if hasattr(strategy, 'set_seed'):
+                            strategy.set_seed(seed)
+        except Exception as e:
+            logger.error(f"Error handling strategy config: {e}")
     
     async def consume_bars(self):
-        """Consume bars from message bus"""
+        """Consume bars from message bus with Streams-optimized processing"""
         logger.info("Starting to consume market bars...")
-        
+
         bars_processed = 0
         signals_generated = 0
-        
-        async for bar in self.bus.subscribe_bars():
-            if not self.running:
-                break
-            
-            try:
-                self.process_bar(bar)
-                bars_processed += 1
-                
-                # Log progress periodically
-                if bars_processed % 100 == 0:
-                    logger.info(f"Processed {bars_processed} bars, generated {signals_generated} signals")
-                
-            except Exception as e:
-                logger.error(f"Error consuming bar: {e}")
-    
+
+        # Check if we're using Streams backend for optimized consumption
+        if hasattr(self.bus.backend, 'consume_with_handler') and self.bus.get_stats().get('backend') == 'streams':
+            logger.info("Using Redis Streams optimized consumption with safe ACK pattern")
+
+            async def bar_handler(msg_data: dict) -> bool:
+                """Handler for Streams-based bar processing"""
+                nonlocal bars_processed, signals_generated
+                try:
+                    if not self.running:
+                        return False
+
+                    # Parse bar from message data
+                    if msg_data.get("type") != "bar":
+                        return True  # ACK non-bar messages
+
+                    bar_data = json.loads(msg_data["data"])
+                    bar = Bar.model_validate(bar_data)
+
+                    # Process the bar
+                    self.process_bar(bar)
+                    bars_processed += 1
+
+                    # Log progress periodically
+                    if bars_processed % 100 == 0:
+                        logger.info(f"Processed {bars_processed} bars, generated {signals_generated} signals")
+
+                    # Test crash simulation for pending message testing
+                    if os.getenv("CRASH_AFTER_READ") == "1":
+                        logger.warning("CRASH_AFTER_READ=1 detected, simulating crash after processing...")
+                        await asyncio.sleep(0.1)  # Small delay to ensure message is in pending state
+                        logger.error("Simulating crash - exiting without ACK!")
+                        os._exit(1)  # Hard exit without ACK
+
+                    # Return True to ACK the message (only after successful processing)
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Error processing bar in handler: {e}")
+                    # Return False to NOT ACK the message (it will remain pending for retry)
+                    return False
+
+            # Use the safe Streams consumption pattern
+            await self.bus.backend.consume_with_handler("bars", bar_handler)
+
+        else:
+            # Fallback to Pub/Sub pattern for backward compatibility
+            logger.info("Using Pub/Sub consumption pattern")
+            async for bar in self.bus.subscribe_bars():
+                if not self.running:
+                    break
+
+                try:
+                    self.process_bar(bar)
+                    bars_processed += 1
+
+                    # Log progress periodically
+                    if bars_processed % 100 == 0:
+                        logger.info(f"Processed {bars_processed} bars, generated {signals_generated} signals")
+
+                except Exception as e:
+                    logger.error(f"Error consuming bar: {e}")
+                    await asyncio.sleep(1)  # Brief pause on error
+
+    async def consume_strategy_events(self):
+        """Consume strategy configuration events"""
+        try:
+            logger.info("Starting to consume strategy configuration events...")
+            async for event in self.bus.subscribe_system_events():
+                if not self.running:
+                    break
+
+                try:
+                    logger.debug(f"Received system event: {event.event_type} from {event.source}")
+                    if event.event_type == "strategy_config":
+                        logger.info(f"Processing strategy config from {event.source}")
+                        self.handle_strategy_config(event.data)
+                except Exception as e:
+                    logger.error(f"Error processing strategy event: {e}")
+
+        except Exception as e:
+            logger.error(f"Error consuming strategy events: {e}")
+
     async def start(self):
         """Start the strategy engine"""
         logger.info("Starting Strategy Engine...")
@@ -343,7 +467,11 @@ class StrategyEngine:
         if not connect_bus():
             logger.error("Failed to connect to message bus")
             return False
-        
+
+        # Mark service start in metrics for all strategies
+        for metrics in self.strategy_metrics.values():
+            metrics.mark_service_start()
+
         # Publish service start event
         self.bus.publish_system_event(
             event_type="service_start",
@@ -358,6 +486,9 @@ class StrategyEngine:
         self.running = True
         
         try:
+            # Start consuming strategy configuration events in background
+            asyncio.create_task(self.consume_strategy_events())
+
             # Start consuming bars
             await self.consume_bars()
             

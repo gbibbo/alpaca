@@ -2,15 +2,16 @@
 
 A comprehensive, microservices-based algorithmic trading platform built with Python, featuring real-time market data ingestion, historical data simulation, intelligent trading strategies, robust risk management, rapid backtesting capabilities, and enterprise-grade monitoring and observability.
 
-## 🆕 Recent Improvements
+## 🆕 Latest Improvements
 
-- **✨ Redis Streams Backend**: Primary message delivery system with consumer groups and automatic recovery
-- **📈 Prometheus Integration**: Comprehensive metrics collection on dedicated port 8013
-- **🔄 Intelligent Fallbacks**: Seamless fallback chain (Streams → Pub/Sub → FakeRedis)
-- **🕰️ Redis 6.0 Support**: Compatible with Redis 6.0+ with feature detection
-- **📊 Enhanced Backtesting**: Realistic modeling with slippage, costs, and visual results
-- **🚑 Smoke Testing**: Quick 3-terminal setup verification with GOOGL example
-- **🔍 Business Metrics**: Signal approval rates, risk violations, and portfolio tracking
+- **✨ System Events Architecture**: Complete implementation of system-wide configuration events with Redis Streams consumer groups
+- **🎯 Reproducible Strategies**: Dynamic seed configuration for deterministic backtesting results
+- **🔄 Safe Message Processing**: ACK-safe pattern with automatic message recovery for Redis 6.0+ compatibility
+- **⏱️ Python 3.10 Compatibility**: Robust ISO-8601 timestamp parsing with 'Z' suffix support
+- **🚀 Backtest API**: REST endpoints for job control, monitoring, and result management
+- **📈 Enhanced Metrics**: Dedicated Prometheus metrics servers with automatic port fallback (8011-8016)
+- **🔧 Crash Recovery Testing**: Automated pending message reclaim validation
+- **📊 PnL Aggregation**: Real-time portfolio tracking with CSV/JSON export capabilities
 
 ## 🏗️ Architecture
 
@@ -163,11 +164,18 @@ RISK_PCT=0.02
 BUS_BACKEND=streams        # 'streams' (preferred) or 'pubsub'
 REDIS_URL=redis://127.0.0.1:6379
 REDIS_DB=0
-BUS_GROUP=trader          # Consumer group name for streams
 USE_FAKE_REDIS=0          # Set to 1 to force FakeRedis
 
 # Metrics Configuration
-RISK_METRICS_PORT=8013    # Prometheus metrics port
+RISK_METRICS_PORT=8011    # Risk Manager metrics
+EXECUTOR_METRICS_PORT=8012 # Executor metrics
+STRATEGIES_METRICS_PORT=8013 # Strategies metrics
+SIMULATOR_METRICS_PORT=8014 # Simulator metrics
+PNL_METRICS_PORT=8015     # PnL Aggregator metrics
+API_METRICS_PORT=8016     # API metrics
+
+# Backtest Configuration
+MAX_CONCURRENT_JOBS=2     # Maximum concurrent backtest jobs
 ```
 
 ### 4. Infrastructure Setup
@@ -266,13 +274,14 @@ python scripts/sim_random.py \
 Replay historical data through the complete trading pipeline:
 
 ```bash
-# Simulate with Alpaca data
+# Simulate with Alpaca data and reproducible seed
 python apps/simulator/main.py \
   --symbols AAPL,GOOGL,TSLA,MSFT \
   --start 2024-01-01 \
   --end 2024-01-31 \
   --timeframe 1Day \
   --speed 5.0 \
+  --seed 42 \
   --no-delays \
   --output simulation_results.json
 
@@ -281,7 +290,43 @@ python apps/simulator/main.py \
   --symbols AAPL,GOOGL \
   --start 2024-01-01 \
   --end 2024-12-31 \
-  --csv data/csv
+  --csv data/csv \
+  --seed 12345
+```
+
+### Reproducible Strategy Configuration
+
+Control strategy behavior dynamically through system events:
+
+```python
+# Publish strategy configuration event
+from lib.bus import connect_bus, get_bus
+
+connect_bus()
+bus = get_bus()
+
+# Set reproducible seed for all strategies
+bus.publish_system_event(
+    event_type="strategy_config",
+    source="backtester",
+    data={
+        "config_type": "reproducible_mode",
+        "random_seed": 42
+    }
+)
+```
+
+**What happens:**
+1. Event published to Redis `system` stream
+2. Strategy Engine consumes via `system_processors` consumer group
+3. Random50Strategy updates its numpy RNG with new seed
+4. All subsequent random signals become deterministic
+
+**Logs you'll see:**
+```
+Starting to consume strategy configuration events...
+Processing strategy config from backtester
+Random50Strategy seed updated to: 42
 ```
 
 ### Service Management
@@ -337,8 +382,14 @@ tail -f logs/data_ingestor.log
 | **Trading API** | http://127.0.0.1:8000 | None | REST API and system monitoring |
 | **API Documentation** | http://127.0.0.1:8000/docs | None | Interactive API documentation |
 | **Live Dashboard** | http://127.0.0.1:8000/dashboard | None | Real-time trading dashboard |
+| **Backtest Jobs** | http://127.0.0.1:8000/backtest/jobs | None | Backtest job management |
 | **Prometheus (Global)** | http://127.0.0.1:9090 | None | System-wide metrics collection |
-| **Risk Manager Metrics** | http://127.0.0.1:8013/metrics | None | Trading-specific Prometheus metrics |
+| **Risk Manager Metrics** | http://127.0.0.1:8011/metrics | None | Risk management metrics |
+| **Executor Metrics** | http://127.0.0.1:8012/metrics | None | Order execution metrics |
+| **Strategies Metrics** | http://127.0.0.1:8013/metrics | None | Strategy performance metrics |
+| **Simulator Metrics** | http://127.0.0.1:8014/metrics | None | Historical simulation metrics |
+| **PnL Metrics** | http://127.0.0.1:8015/metrics | None | Portfolio P&L metrics |
+| **API Metrics** | http://127.0.0.1:8016/metrics | None | API service metrics |
 | **Grafana** | http://127.0.0.1:3000 | admin / trading123 | Advanced dashboard and alerting |
 
 ## 🏗️ System Components
@@ -411,6 +462,15 @@ Redis-based message communication with intelligent fallbacks:
 - **Consumer Groups**: Distributed message processing with load balancing
 - **Message Persistence**: Durable message storage with replay capability
 - **Health Monitoring**: Built-in connection health checks and automatic reconnection
+
+### System Events Architecture (`lib/bus_streams.py`)
+Real-time configuration and control system:
+- **Event Types**: `strategy_config`, `service_start`, `service_stop`, `emergency_stop`
+- **Consumer Groups**: Uses `system_processors` group for reliable event delivery
+- **Safe ACK Pattern**: Messages ACKed only after successful processing
+- **Redis 6.0 Support**: Manual pending message reclaim using XPENDING + XCLAIM
+- **Dynamic Configuration**: Real-time strategy parameter updates without service restarts
+- **Python 3.10 Compatible**: Robust timestamp parsing for ISO-8601 with 'Z' suffix
 
 ## 🔧 Configuration
 
@@ -564,6 +624,53 @@ logs/
 
 ## 🧪 Testing & Validation
 
+### System Events Testing
+
+Test the system events architecture and reproducible strategies:
+
+```bash
+# Run contract tests
+pytest -q \
+  tests/test_system_events_contract.py::test_backend_exposes_subscribe_system_events \
+  tests/test_system_events_contract.py::test_bus_subscribe_system_events_consumes_one_event_isolated \
+  tests/test_system_events_contract.py::test_publish_and_consume_system_with_xreadgroup
+
+# Test timestamp parsing compatibility (Python 3.10)
+pytest -q tests/test_timeutils_parse_timestamp.py
+
+# Manual system events test
+python test_system_events_demo.py
+
+# End-to-end seed flow test
+python test_seed_flow_demo.py
+```
+
+**Expected Results:**
+- All contract tests should pass
+- System events should flow through Redis `system` stream
+- Strategies should receive configuration updates
+- Seed changes should be applied dynamically
+
+### Redis Streams Diagnostics
+
+Monitor system events and consumer groups:
+
+```bash
+# Check system stream status
+redis-cli XINFO GROUPS system
+redis-cli XINFO CONSUMERS system system_processors
+redis-cli XLEN system
+
+# View recent system events
+redis-cli XREVRANGE system + - COUNT 5
+
+# Check for pending messages
+redis-cli XPENDING system system_processors
+
+# Reset consumer group if needed (Redis 6.0 compatibility)
+redis-cli XGROUP SETID system system_processors $
+```
+
 ### Quick Strategy Testing
 ```bash
 # Test with synthetic data
@@ -620,15 +727,50 @@ curl -s http://127.0.0.1:8000/signals/history
 curl -s http://127.0.0.1:8000/status | jq '.message_bus'
 ```
 
+### Backtest API Testing
+```bash
+# Create a backtest job
+curl -X POST http://127.0.0.1:8000/backtest/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbols": ["AAPL", "GOOGL"],
+    "start_date": "2022-01-01",
+    "end_date": "2022-01-31",
+    "timeframe": "1Day",
+    "seed": 42,
+    "strategies": ["random_50_50"]
+  }'
+
+# Quick backtest
+curl -X POST "http://127.0.0.1:8000/backtest/quick?symbols=AAPL&days=30&seed=42"
+
+# List all jobs
+curl -s http://127.0.0.1:8000/backtest/jobs
+
+# Get job status
+curl -s http://127.0.0.1:8000/backtest/jobs/{job_id}
+
+# Download results
+curl -s http://127.0.0.1:8000/backtest/jobs/{job_id}/download -o results.json
+
+# Get backtest statistics
+curl -s http://127.0.0.1:8000/backtest/stats
+```
+
 ### System Validation
 ```bash
-# Complete system test
-python scripts/control.py stop
-python scripts/control.py start
-python scripts/control.py status
+# Start monitoring stack
+./scripts/start-monitoring.sh
 
-# Verify data pipeline with simulation
+# Start trading system
+./scripts/start-with-metrics.sh
+
+# Verify pipeline with simulation
 python apps/simulator/main.py --symbols AAPL --start 2024-01-01 --end 2024-01-02 --csv data/csv
+
+# Access monitoring
+open http://localhost:3000  # Grafana (admin/admin123)
+open http://localhost:8000  # Trading UI
 ```
 
 ## 🔍 Troubleshooting
@@ -759,13 +901,28 @@ python apps/simulator/main.py --speed 0.1  # Very slow simulation
 ## 📚 API Reference
 
 ### REST Endpoints
+
+**System Monitoring:**
 - `GET /health` - System health check with message bus status
 - `GET /status` - Comprehensive system status including message bus statistics
 - `GET /metrics` - Prometheus metrics
+
+**Trading Operations:**
 - `POST /signals/manual` - Create manual trading signal
 - `GET /signals/history` - Signal history with filtering
 - `GET /portfolio` - Current portfolio state
 - `GET /positions/{symbol}` - Position details
+
+**Backtest Management:**
+- `POST /backtest/jobs` - Create new backtest job
+- `GET /backtest/jobs` - List all backtest jobs
+- `GET /backtest/jobs/{job_id}` - Get specific job status
+- `POST /backtest/jobs/{job_id}/start` - Start queued job
+- `POST /backtest/jobs/{job_id}/cancel` - Cancel running job
+- `GET /backtest/jobs/{job_id}/results` - Get job results
+- `GET /backtest/jobs/{job_id}/download` - Download results as JSON
+- `POST /backtest/quick` - Quick backtest for testing
+- `GET /backtest/stats` - Backtest system statistics
 
 ### WebSocket Endpoints
 - `WS /ws/dashboard` - Real-time dashboard updates

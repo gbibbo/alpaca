@@ -11,7 +11,7 @@ import logging
 import os
 import time
 import socket
-from typing import Any, Callable, Dict, Optional, List, Tuple, Awaitable
+from typing import Any, Callable, Dict, Optional, List, Tuple, Awaitable, AsyncGenerator
 from datetime import datetime, timezone
 from lib.models import Bar, Signal, OrderIntent, OrderFill, MessageEvent
 from lib.time_utils import TimeUtils
@@ -245,10 +245,39 @@ class RedisStreamsBus:
                     self._supports_xautoclaim = False
 
             if not self._supports_xautoclaim:
-                # For Redis < 6.2, skip pending message recovery
-                # In production, you could implement XPENDING + XCLAIM fallback
-                logger.debug(f"Skipping pending message recovery for {stream_name} (Redis < 6.2)")
-                return []
+                # For Redis < 6.2, implement manual reclaim with XPENDING + XCLAIM
+                logger.debug(f"Using manual reclaim for {stream_name} (Redis < 6.2)")
+                try:
+                    # Get pending messages
+                    pending_info = self.redis_client.xpending_range(
+                        stream_name, consumer_group,
+                        min='-', max='+', count=10
+                    )
+
+                    if not pending_info:
+                        return []
+
+                    # Filter by idle time
+                    old_messages = []
+                    for msg_info in pending_info:
+                        if msg_info.get('time_since_delivered', 0) > min_idle:
+                            old_messages.append(msg_info['message_id'])
+
+                    if not old_messages:
+                        return []
+
+                    # Claim old messages to current consumer
+                    claimed = self.redis_client.xclaim(
+                        stream_name, consumer_group, self.consumer_id,
+                        min_idle_time=min_idle, message_ids=old_messages
+                    )
+
+                    logger.info(f"Manually reclaimed {len(claimed)} pending messages from {stream_name}")
+                    return [(msg_id, msg_data) for msg_id, msg_data in claimed]
+
+                except Exception as e:
+                    logger.error(f"Error in manual reclaim for {stream_name}: {e}")
+                    return []
 
             # Use XAUTOCLAIM to reclaim old pending messages
             result = self.redis_client.xautoclaim(
@@ -327,6 +356,180 @@ class RedisStreamsBus:
                 else:
                     logger.error(f"Too many consecutive errors, stopping consumption of {stream_type}")
                     break
+
+    async def _ensure_group(self, stream: str, group: str) -> None:
+        """Ensure a consumer group exists for a stream"""
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.redis_client.xgroup_create(stream, group, id="$", mkstream=True)
+            )
+        except Exception as e:
+            if "BUSYGROUP" not in str(e):
+                logger.debug(f"Error ensuring group {group} for stream {stream}: {e}")
+
+    def _b2s(self, x):
+        """Convert bytes to string if needed"""
+        return x.decode() if isinstance(x, (bytes, bytearray)) else x
+
+    def _parse_system_event(self, msg_id, fields: Dict[Any, Any]) -> MessageEvent:
+        """Parse system event from Redis stream message"""
+        f = {self._b2s(k): self._b2s(v) for k, v in dict(fields).items()}
+
+        # Try to parse data field as JSON
+        payload = {}
+        try:
+            data_str = f.get("data", "{}")
+            payload = json.loads(data_str) if data_str != "{}" else {}
+        except Exception:
+            payload = {}
+
+        # Extract event type (check field-level first, then payload)
+        evt_type = f.get("event_type") or payload.get("event_type") or "unknown"
+
+        # Extract source (check field-level first, then payload)
+        source = f.get("source") or payload.get("source") or "unknown"
+
+        # Extract timestamp (check field-level first, then payload)
+        ts = f.get("timestamp") or payload.get("timestamp")
+
+        return MessageEvent(
+            id=str(msg_id),
+            event_type=evt_type,
+            source=source,
+            data=payload,
+            timestamp=TimeUtils.parse_timestamp(ts)
+        )
+
+    async def _reclaim_pending_system(self, min_idle_ms: int = 60_000, max_claim: int = 100) -> None:
+        """Reclaim pending system events using Redis 6.0 compatible method"""
+        stream_name = self.streams["system"]
+        group_name = self.consumer_groups["system"]
+
+        try:
+            # Redis 6.0: use XPENDING + XCLAIM
+            pending_info = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.redis_client.xpending_range(
+                    stream_name, group_name, min="-", max="+", count=max_claim
+                )
+            )
+
+            if not pending_info:
+                return
+
+            # Filter by idle time and claim old messages
+            old_message_ids = []
+            for msg_info in pending_info:
+                # Handle both namedtuple and dict formats from redis-py
+                if hasattr(msg_info, 'time_since_delivered'):
+                    idle_time = msg_info.time_since_delivered
+                    msg_id = msg_info.message_id
+                elif isinstance(msg_info, dict):
+                    idle_time = msg_info.get('time_since_delivered', 0)
+                    msg_id = msg_info.get('message_id')
+                else:
+                    continue
+
+                if idle_time and idle_time >= min_idle_ms and msg_id:
+                    old_message_ids.append(msg_id)
+
+            if old_message_ids:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.redis_client.xclaim(
+                        stream_name, group_name, self.consumer_id,
+                        min_idle_time=min_idle_ms, message_ids=old_message_ids
+                    )
+                )
+                logger.info(f"Reclaimed {len(old_message_ids)} pending system events")
+
+        except Exception as e:
+            logger.debug(f"Error reclaiming pending system events: {e}")
+
+    async def subscribe_system_events(self, event_type: str = "*") -> AsyncGenerator[MessageEvent, None]:
+        """
+        Subscribe to system events using Redis Streams with consumer groups.
+        Implements safe ACK pattern: ACK previous message when yielding next one.
+        """
+        stream_name = self.streams["system"]
+        group_name = self.consumer_groups["system"]
+
+        # Ensure consumer group exists
+        await self._ensure_group(stream_name, group_name)
+
+        # Reclaim any pending messages
+        await self._reclaim_pending_system()
+
+        last_to_ack = None
+
+        try:
+            while True:
+                # Read from the stream using consumer group
+                messages = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self.redis_client.xreadgroup(
+                        groupname=group_name,
+                        consumername=self.consumer_id,
+                        streams={stream_name: ">"},
+                        count=16,
+                        block=1000  # 1 second timeout
+                    )
+                )
+
+                if not messages:
+                    continue
+
+                # Process messages: List[(stream, [(id, {fields}), ...])]
+                for _stream, entries in messages:
+                    for msg_id, fields in entries:
+                        try:
+                            # Parse the system event
+                            evt = self._parse_system_event(msg_id, fields)
+
+                            # Filter by event type if specified
+                            if event_type != "*" and evt.event_type != event_type:
+                                # ACK filtered events immediately
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None,
+                                    lambda: self.redis_client.xack(stream_name, group_name, msg_id)
+                                )
+                                continue
+
+                            # Safe ACK pattern: ACK the previous message before yielding new one
+                            if last_to_ack:
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None,
+                                    lambda: self.redis_client.xack(stream_name, group_name, last_to_ack)
+                                )
+
+                            last_to_ack = msg_id
+                            yield evt
+
+                        except Exception as e:
+                            logger.error(f"Error processing system event {msg_id}: {e}")
+                            # ACK poison pill messages to avoid loops
+                            await asyncio.get_event_loop().run_in_executor(
+                                None,
+                                lambda: self.redis_client.xack(stream_name, group_name, msg_id)
+                            )
+
+        except asyncio.CancelledError:
+            logger.info("System events subscription cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in system events subscription: {e}")
+            raise
+        finally:
+            # Best effort ACK of the last message
+            if last_to_ack:
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self.redis_client.xack(stream_name, group_name, last_to_ack)
+                    )
+                except Exception as e:
+                    logger.debug(f"Error in final ACK: {e}")
 
     # High-level publishing methods
     def publish_bar(self, bar: Bar) -> str:

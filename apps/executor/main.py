@@ -31,6 +31,10 @@ from lib.time_utils import (
     check_alpaca_rate_limit, record_alpaca_call
 )
 from lib.deduplication import get_deduplication_service
+from lib.metrics_helpers import (
+    ExecutorMetrics, start_metrics_server, find_available_port,
+    time_order_execution, time_api_request, time_bus_processing
+)
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
@@ -254,6 +258,27 @@ class EnhancedAlpacaExecutor:
         self.deduplication = get_deduplication_service()
         self.rate_manager = AlpacaRateManager()
         self.order_tracker = OrderTracker()
+
+        # Initialize metrics
+        self.metrics = ExecutorMetrics()
+
+        # Start metrics server
+        try:
+            metrics_port = int(os.getenv("EXECUTOR_METRICS_PORT", "8012"))
+            start_metrics_server(metrics_port)
+            logger.info(f"📊 Executor metrics available at http://localhost:{metrics_port}/metrics")
+        except OSError as e:
+            if getattr(e, "errno", None) == 98:  # Address already in use
+                try:
+                    metrics_port = find_available_port(metrics_port + 1)
+                    start_metrics_server(metrics_port)
+                    logger.warning(f"Metrics port busy. Using fallback http://localhost:{metrics_port}/metrics")
+                except Exception as fallback_error:
+                    logger.warning(f"Failed to start metrics server on fallback port: {fallback_error}")
+            else:
+                logger.warning(f"Failed to start metrics server: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to start metrics server: {e}")
         
         # Retry configurations for different operations
         self.retry_configs = {
@@ -395,132 +420,149 @@ class EnhancedAlpacaExecutor:
     
     async def execute_order_with_validation(self, order_intent: OrderIntent) -> Optional[OrderFill]:
         """Execute order with comprehensive validation and error handling"""
-        try:
-            logger.info(f"Executing order: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
-            
-            # Validate sell orders have sufficient position
-            if order_intent.side == SignalSide.SELL:
-                has_position, current_qty = await self.check_position_for_sell(order_intent.symbol, order_intent.quantity)
-                
-                if not has_position:
-                    logger.warning(f"Insufficient position for sell: need {order_intent.quantity}, have {current_qty}")
-                    
-                    # Publish error event
-                    self.bus.publish_system_event(
-                        event_type="order_validation_failed",
-                        source="executor",
-                        data={
-                            "symbol": order_intent.symbol,
-                            "reason": "insufficient_position",
-                            "required_quantity": float(order_intent.quantity),
-                            "current_position": float(current_qty),
-                            "client_order_id": order_intent.client_order_id
-                        }
+        # Start order execution timing
+        with time_order_execution(order_intent.symbol, order_intent.order_type.value):
+            try:
+                logger.info(f"Executing order: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
+
+                # Record order submission attempt
+                self.metrics.order_submitted(
+                    symbol=order_intent.symbol,
+                    side=order_intent.side.value,
+                    order_type=order_intent.order_type.value
+                )
+
+                # Validate sell orders have sufficient position
+                if order_intent.side == SignalSide.SELL:
+                    has_position, current_qty = await self.check_position_for_sell(order_intent.symbol, order_intent.quantity)
+
+                    if not has_position:
+                        logger.warning(f"Insufficient position for sell: need {order_intent.quantity}, have {current_qty}")
+
+                        # Publish error event
+                        self.bus.publish_system_event(
+                            event_type="order_validation_failed",
+                            source="executor",
+                            data={
+                                "symbol": order_intent.symbol,
+                                "reason": "insufficient_position",
+                                "required_quantity": float(order_intent.quantity),
+                                "current_position": float(current_qty),
+                                "client_order_id": order_intent.client_order_id
+                            }
+                        )
+                        return None
+
+                # Convert order side
+                alpaca_side = self.convert_side(order_intent.side)
+
+                # Create order request based on type
+                if order_intent.order_type == OrderType.MARKET:
+                    order_request = MarketOrderRequest(
+                        symbol=order_intent.symbol,
+                        qty=float(order_intent.quantity),  # Alpaca expects float
+                        side=alpaca_side,
+                        time_in_force=TimeInForce.DAY,
+                        client_order_id=order_intent.client_order_id
                     )
+            
+                elif order_intent.order_type == OrderType.LIMIT:
+                    if not order_intent.price:
+                        logger.error("Limit order requires price")
+                        return None
+
+                    order_request = LimitOrderRequest(
+                        symbol=order_intent.symbol,
+                        qty=float(order_intent.quantity),
+                        side=alpaca_side,
+                        time_in_force=TimeInForce.DAY,
+                        limit_price=float(order_intent.price),
+                        client_order_id=order_intent.client_order_id
+                    )
+            
+                else:
+                    logger.error(f"Unsupported order type: {order_intent.order_type}")
                     return None
-            
-            # Convert order side
-            alpaca_side = self.convert_side(order_intent.side)
-            
-            # Create order request based on type
-            if order_intent.order_type == OrderType.MARKET:
-                order_request = MarketOrderRequest(
-                    symbol=order_intent.symbol,
-                    qty=float(order_intent.quantity),  # Alpaca expects float
-                    side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
-                    client_order_id=order_intent.client_order_id
+
+                # Submit order with retry logic
+                order_response = await self._execute_with_retry(
+                    operation="submit_order",
+                    func=lambda: self.trading_client.submit_order(order_request),
+                    description=f"Order submission for {order_intent.symbol}"
                 )
-            
-            elif order_intent.order_type == OrderType.LIMIT:
-                if not order_intent.price:
-                    logger.error("Limit order requires price")
-                    return None
-                
-                order_request = LimitOrderRequest(
-                    symbol=order_intent.symbol,
-                    qty=float(order_intent.quantity),
-                    side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
-                    limit_price=float(order_intent.price),
-                    client_order_id=order_intent.client_order_id
-                )
-            
-            else:
-                logger.error(f"Unsupported order type: {order_intent.order_type}")
+
+                # Add to order tracker
+                self.order_tracker.add_pending_order(order_intent, order_response.id)
+
+                logger.info(f"✅ Order submitted successfully:")
+                logger.info(f"  Alpaca Order ID: {order_response.id}")
+                logger.info(f"  Status: {order_response.status}")
+                logger.info(f"  Symbol: {order_response.symbol}")
+                logger.info(f"  Quantity: {order_response.qty}")
+                logger.info(f"  Side: {order_response.side}")
+
+                # Update metrics
+                self.successful_executions += 1
+                self.total_volume += Decimal(str(order_intent.quantity)) * Decimal(str(order_intent.price or 0))
+
+                # For market orders, create immediate fill (Alpaca paper trading fills instantly)
+                if order_intent.order_type == OrderType.MARKET:
+                    fill_price = Decimal(str(order_intent.price or order_response.limit_price or 0))
+
+                    order_fill = OrderFill(
+                        symbol=order_intent.symbol,
+                        timestamp=TimeUtils.utc_now(),
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        fill_price=fill_price,
+                        fill_quantity=order_intent.quantity,
+                        broker_order_id=order_response.id,
+                        client_order_id=order_intent.client_order_id,
+                        status=OrderStatus.FILLED,
+                        commission=Decimal('0.0'),
+                        total_value=fill_price * order_intent.quantity
+                    )
+
+                    # Update order tracker
+                    self.order_tracker.update_order_status(
+                        order_response.id,
+                        "filled",
+                        order_intent.quantity,
+                        fill_price
+                    )
+
+                    logger.info(f"Market order filled: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
+
+                    return order_fill
+
                 return None
-            
-            # Submit order with retry logic
-            order_response = await self._execute_with_retry(
-                operation="submit_order",
-                func=lambda: self.trading_client.submit_order(order_request),
-                description=f"Order submission for {order_intent.symbol}"
-            )
-            
-            # Add to order tracker
-            self.order_tracker.add_pending_order(order_intent, order_response.id)
-            
-            logger.info(f"✅ Order submitted successfully:")
-            logger.info(f"  Alpaca Order ID: {order_response.id}")
-            logger.info(f"  Status: {order_response.status}")
-            logger.info(f"  Symbol: {order_response.symbol}")
-            logger.info(f"  Quantity: {order_response.qty}")
-            logger.info(f"  Side: {order_response.side}")
-            
-            # Update metrics
-            self.successful_executions += 1
-            self.total_volume += Decimal(str(order_intent.quantity)) * Decimal(str(order_intent.price or 0))
-            
-            # For market orders, create immediate fill (Alpaca paper trading fills instantly)
-            if order_intent.order_type == OrderType.MARKET:
-                fill_price = Decimal(str(order_intent.price or order_response.limit_price or 0))
-                
-                order_fill = OrderFill(
+
+            except Exception as e:
+                self.failed_executions += 1
+                logger.error(f"Failed to execute order for {order_intent.symbol}: {e}")
+
+                # Record failure metrics
+                error_type = "alpaca_error" if "alpaca" in str(e).lower() else "execution_error"
+                self.metrics.order_failed(
                     symbol=order_intent.symbol,
-                    timestamp=TimeUtils.utc_now(),
-                    side=order_intent.side,
-                    quantity=order_intent.quantity,
-                    fill_price=fill_price,
-                    fill_quantity=order_intent.quantity,
-                    broker_order_id=order_response.id,
-                    client_order_id=order_intent.client_order_id,
-                    status=OrderStatus.FILLED,
-                    commission=Decimal('0.0'),
-                    total_value=fill_price * order_intent.quantity
+                    side=order_intent.side.value,
+                    error_type=error_type
                 )
-                
-                # Update order tracker
-                self.order_tracker.update_order_status(
-                    order_response.id, 
-                    "filled", 
-                    order_intent.quantity, 
-                    fill_price
+
+                # Publish error event
+                self.bus.publish_system_event(
+                    event_type="order_execution_failed",
+                    source="executor",
+                    data={
+                        "symbol": order_intent.symbol,
+                        "side": order_intent.side,
+                        "quantity": float(order_intent.quantity),
+                        "error": str(e),
+                        "client_order_id": order_intent.client_order_id
+                    }
                 )
-                
-                logger.info(f"Market order filled: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
-                
-                return order_fill
-            
-            return None
-            
-        except Exception as e:
-            self.failed_executions += 1
-            logger.error(f"Failed to execute order for {order_intent.symbol}: {e}")
-            
-            # Publish error event
-            self.bus.publish_system_event(
-                event_type="order_execution_failed",
-                source="executor",
-                data={
-                    "symbol": order_intent.symbol,
-                    "side": order_intent.side,
-                    "quantity": float(order_intent.quantity),
-                    "error": str(e),
-                    "client_order_id": order_intent.client_order_id
-                }
-            )
-            
-            return None
+
+                return None
     
     async def monitor_pending_orders(self):
         """Monitor pending orders for fills and status updates"""
@@ -573,9 +615,18 @@ class EnhancedAlpacaExecutor:
             if order_fill:
                 # Mark fill as processed to prevent duplicates
                 if self.deduplication.mark_fill_processed(order_fill):
+                    # Record fill metrics
+                    fill_type = "full" if order_fill.fill_quantity == order_fill.quantity else "partial"
+                    self.metrics.order_filled(
+                        symbol=order_fill.symbol,
+                        side=order_fill.side.value,
+                        fill_type=fill_type,
+                        value=float(order_fill.total_value)
+                    )
+
                     # Publish fill event
                     self.bus.publish_order_fill(order_fill)
-                    
+
                     logger.info(f"✅ Order fill published: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
                     
                     # Publish execution event
@@ -711,6 +762,9 @@ class EnhancedAlpacaExecutor:
             logger.error("Failed to connect to message bus")
             return False
         
+        # Mark service start in metrics
+        self.metrics.mark_service_start()
+
         # Verify account status
         try:
             account = await self.verify_account_status()
@@ -765,7 +819,10 @@ class EnhancedAlpacaExecutor:
         """Stop enhanced executor"""
         logger.info("Stopping Enhanced Executor...")
         self.running = False
-        
+
+        # Mark service stop in metrics
+        self.metrics.mark_service_stop()
+
         # Show final statistics
         final_stats = self.get_comprehensive_stats()
         

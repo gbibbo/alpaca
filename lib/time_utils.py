@@ -96,8 +96,46 @@ class TimeUtils:
             dt = TimeUtils.eastern_now()
         elif dt.tzinfo != US_EASTERN:
             dt = TimeUtils.to_eastern(dt)
-        
+
         return dt.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    @staticmethod
+    def parse_timestamp(ts) -> datetime:
+        """
+        Parse ISO-8601 timestamp with Python 3.10 compatibility.
+        Handles 'Z' suffix by replacing with '+00:00'.
+        Returns timezone-aware datetime in UTC.
+        Fallback: returns utc_now() on any parsing error.
+        """
+        if not ts:
+            return TimeUtils.utc_now()
+
+        try:
+            # Convert bytes to string if needed
+            s = ts
+            if isinstance(s, (bytes, bytearray)):
+                s = s.decode()
+
+            if isinstance(s, str):
+                # Python 3.10 doesn't handle 'Z' suffix, replace with '+00:00'
+                if s.endswith('Z'):
+                    s = s[:-1] + '+00:00'
+
+                # Parse the timestamp
+                dt = datetime.fromisoformat(s)
+
+                # Ensure timezone awareness
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+
+                # Convert to UTC
+                return dt.astimezone(timezone.utc)
+
+        except Exception as e:
+            logger.debug(f"Failed to parse timestamp '{ts}': {e}")
+
+        # Fallback to current time on any error
+        return TimeUtils.utc_now()
 
 
 class MonotonicTimer:

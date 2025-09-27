@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.40.7
+    container_name: trading-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./grafana/alerting/trading-alerts.yml:/etc/prometheus/alerts/trading-alerts.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--alertmanager.notification-queue-capacity=10000'
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:9.5.2
+    container_name: trading-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_ALERTING_ENABLED=false
+    networks:
+      - trading-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    container_name: trading-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    networks:
+      - trading-network
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.50.0
+    container_name: trading-redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    networks:
+      - trading-network
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+
+networks:
+  trading-network:
+    external: true

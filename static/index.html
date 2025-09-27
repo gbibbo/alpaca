@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpaca Trading System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e6e6e6;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 20px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 10px;
+            border: 1px solid #333;
+        }
+
+        .header h1 {
+            color: #4CAF50;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #888;
+            font-size: 1.1em;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .card h3 {
+            color: #4CAF50;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-online { background-color: #4CAF50; }
+        .status-offline { background-color: #f44336; }
+        .status-warning { background-color: #ff9800; }
+
+        .service-list {
+            list-style: none;
+        }
+
+        .service-list li {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #333;
+        }
+
+        .service-list li:last-child {
+            border-bottom: none;
+        }
+
+        .btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px 5px 5px 0;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #45a049;
+        }
+
+        .btn-secondary {
+            background: #2196F3;
+        }
+
+        .btn-secondary:hover {
+            background: #1976D2;
+        }
+
+        .btn-danger {
+            background: #f44336;
+        }
+
+        .btn-danger:hover {
+            background: #d32f2f;
+        }
+
+        .backtest-form {
+            background: #1a1a2e;
+            padding: 25px;
+            border-radius: 10px;
+            border: 1px solid #333;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #ccc;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px;
+            background: #2a2a3e;
+            border: 1px solid #555;
+            border-radius: 5px;
+            color: #e6e6e6;
+            font-size: 14px;
+        }
+
+        .jobs-list {
+            background: #1a1a2e;
+            border-radius: 10px;
+            border: 1px solid #333;
+            padding: 20px;
+        }
+
+        .job-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #2a2a3e;
+            border-radius: 5px;
+            border: 1px solid #444;
+        }
+
+        .job-info h4 {
+            color: #4CAF50;
+            margin-bottom: 5px;
+        }
+
+        .job-info p {
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        .job-status {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .status-running { background: #2196F3; color: white; }
+        .status-completed { background: #4CAF50; color: white; }
+        .status-failed { background: #f44336; color: white; }
+        .status-created { background: #ff9800; color: white; }
+
+        .metrics-link {
+            color: #2196F3;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+
+        .metrics-link:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .container {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🦙 Alpaca Trading System</h1>
+            <p>Real-time algorithmic trading with Redis Streams & Prometheus monitoring</p>
+        </div>
+
+        <div class="grid">
+            <!-- System Status -->
+            <div class="card">
+                <h3>System Status</h3>
+                <ul class="service-list" id="service-status">
+                    <li><span class="status-indicator status-offline"></span>Loading...</li>
+                </ul>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="card">
+                <h3>Quick Actions</h3>
+                <button class="btn" onclick="refreshStatus()">🔄 Refresh Status</button>
+                <button class="btn btn-secondary" onclick="window.open('http://localhost:3000', '_blank')">📊 Grafana</button>
+                <button class="btn btn-secondary" onclick="window.open('http://localhost:9090', '_blank')">📈 Prometheus</button>
+                <button class="btn btn-secondary" onclick="window.open('/docs', '_blank')">📚 API Docs</button>
+            </div>
+        </div>
+
+        <!-- Backtest Control -->
+        <div class="backtest-form">
+            <h3>🧪 Backtest Configuration</h3>
+            <form id="backtest-form">
+                <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                    <div class="form-group">
+                        <label for="strategy">Strategy:</label>
+                        <select id="strategy" required>
+                            <option value="random_50_50">Random 50/50</option>
+                            <option value="buy_and_hold">Buy and Hold</option>
+                            <option value="mean_reversion">Mean Reversion</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="symbol">Symbol:</label>
+                        <select id="symbol" required>
+                            <option value="AAPL">AAPL</option>
+                            <option value="GOOGL">GOOGL</option>
+                            <option value="MSFT">MSFT</option>
+                            <option value="SPY">SPY</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="start_date">Start Date:</label>
+                        <input type="date" id="start_date" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="end_date">End Date:</label>
+                        <input type="date" id="end_date" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="initial_capital">Initial Capital ($):</label>
+                        <input type="number" id="initial_capital" value="100000" min="1000" step="1000" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="seed">Random Seed:</label>
+                        <input type="number" id="seed" value="42" min="1">
+                    </div>
+                </div>
+                <button type="submit" class="btn">🚀 Start Backtest</button>
+            </form>
+        </div>
+
+        <!-- Active Jobs -->
+        <div class="jobs-list">
+            <h3>📋 Backtest Jobs</h3>
+            <div id="jobs-container">
+                <p style="color: #888;">Loading jobs...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API base URL
+        const API_BASE = window.location.origin;
+
+        // Service endpoints for health checks
+        const SERVICES = {
+            'API Server': 'http://localhost:8000/health',
+            'Market Data': 'http://localhost:8001/health',
+            'Strategies': 'http://localhost:8002/health',
+            'Executor': 'http://localhost:8003/health',
+            'PnL Aggregator': 'http://localhost:8004/health',
+            'Risk Manager': 'http://localhost:8005/health'
+        };
+
+        // Metrics endpoints
+        const METRICS = {
+            'Market Data': 'http://localhost:8011/metrics',
+            'Strategies': 'http://localhost:8012/metrics',
+            'Executor': 'http://localhost:8013/metrics',
+            'PnL Aggregator': 'http://localhost:8014/metrics',
+            'Risk Manager': 'http://localhost:8015/metrics',
+            'API': 'http://localhost:8016/metrics'
+        };
+
+        // Set default dates
+        document.addEventListener('DOMContentLoaded', function() {
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setMonth(endDate.getMonth() - 1);
+
+            document.getElementById('end_date').value = endDate.toISOString().split('T')[0];
+            document.getElementById('start_date').value = startDate.toISOString().split('T')[0];
+
+            refreshStatus();
+            loadJobs();
+
+            // Auto-refresh every 30 seconds
+            setInterval(refreshStatus, 30000);
+            setInterval(loadJobs, 10000);
+        });
+
+        async function checkServiceHealth(name, url) {
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    mode: 'cors',
+                    timeout: 5000
+                });
+                return response.ok;
+            } catch (error) {
+                return false;
+            }
+        }
+
+        async function refreshStatus() {
+            const statusContainer = document.getElementById('service-status');
+            statusContainer.innerHTML = '<li><span class="status-indicator status-warning"></span>Checking services...</li>';
+
+            const statusItems = [];
+
+            for (const [name, url] of Object.entries(SERVICES)) {
+                const isHealthy = await checkServiceHealth(name, url);
+                const statusClass = isHealthy ? 'status-online' : 'status-offline';
+                const metricsUrl = METRICS[name] || METRICS[name.replace(' ', '')] || '';
+                const metricsLink = metricsUrl ? `<a href="${metricsUrl}" target="_blank" class="metrics-link">metrics</a>` : '';
+
+                statusItems.push(`
+                    <li>
+                        <span class="status-indicator ${statusClass}"></span>
+                        ${name} ${metricsLink}
+                    </li>
+                `);
+            }
+
+            statusContainer.innerHTML = statusItems.join('');
+        }
+
+        async function loadJobs() {
+            try {
+                const response = await fetch(`${API_BASE}/backtest/jobs`);
+                const jobs = await response.json();
+
+                const container = document.getElementById('jobs-container');
+
+                if (jobs.length === 0) {
+                    container.innerHTML = '<p style="color: #888;">No backtest jobs found.</p>';
+                    return;
+                }
+
+                const jobsHtml = jobs.map(job => `
+                    <div class="job-item">
+                        <div class="job-info">
+                            <h4>Job ${job.job_id}</h4>
+                            <p>${job.strategy} • ${job.symbol} • ${job.start_date} to ${job.end_date}</p>
+                            <p>Capital: $${job.initial_capital?.toLocaleString() || 'N/A'} • Created: ${new Date(job.created_at).toLocaleString()}</p>
+                        </div>
+                        <div class="job-actions">
+                            <span class="job-status status-${job.status}">${job.status.toUpperCase()}</span>
+                            ${job.status === 'running' ?
+                                `<button class="btn btn-danger" onclick="stopJob('${job.job_id}')">Stop</button>` :
+                                ''
+                            }
+                            ${job.status === 'completed' ?
+                                `<button class="btn btn-secondary" onclick="downloadResults('${job.job_id}')">Results</button>` :
+                                ''
+                            }
+                        </div>
+                    </div>
+                `).join('');
+
+                container.innerHTML = jobsHtml;
+            } catch (error) {
+                console.error('Failed to load jobs:', error);
+                document.getElementById('jobs-container').innerHTML =
+                    '<p style="color: #f44336;">Failed to load jobs. Check if API service is running.</p>';
+            }
+        }
+
+        document.getElementById('backtest-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+            const data = {
+                strategy: formData.get('strategy'),
+                symbol: formData.get('symbol'),
+                start_date: formData.get('start_date'),
+                end_date: formData.get('end_date'),
+                initial_capital: parseFloat(formData.get('initial_capital')),
+                config: {
+                    seed: parseInt(formData.get('seed')) || 42
+                }
+            };
+
+            try {
+                const response = await fetch(`${API_BASE}/backtest/jobs`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    alert(`Backtest job created successfully! Job ID: ${result.job_id}`);
+                    loadJobs(); // Refresh the jobs list
+                } else {
+                    const error = await response.json();
+                    alert(`Failed to create backtest: ${error.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`Error creating backtest: ${error.message}`);
+            }
+        });
+
+        async function stopJob(jobId) {
+            if (!confirm('Are you sure you want to stop this job?')) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/backtest/jobs/${jobId}/stop`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    alert('Job stopped successfully');
+                    loadJobs();
+                } else {
+                    alert('Failed to stop job');
+                }
+            } catch (error) {
+                alert(`Error stopping job: ${error.message}`);
+            }
+        }
+
+        async function downloadResults(jobId) {
+            try {
+                const response = await fetch(`${API_BASE}/backtest/jobs/${jobId}/results`);
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `backtest_results_${jobId}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    alert('Failed to download results');
+                }
+            } catch (error) {
+                alert(`Error downloading results: ${error.message}`);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -202,6 +202,16 @@ class EnhancedRiskManager:
             metrics_port = int(os.getenv("RISK_METRICS_PORT", "8011"))
             start_metrics_server(metrics_port)
             logger.info(f"📊 Risk Manager metrics available at http://localhost:{metrics_port}/metrics")
+        except OSError as e:
+            if getattr(e, "errno", None) == 98:  # Address already in use
+                try:
+                    metrics_port = find_available_port(metrics_port + 1)
+                    start_metrics_server(metrics_port)
+                    logger.warning(f"Metrics port busy. Using fallback http://localhost:{metrics_port}/metrics")
+                except Exception as fallback_error:
+                    logger.warning(f"Failed to start metrics server on fallback port: {fallback_error}")
+            else:
+                logger.warning(f"Failed to start metrics server: {e}")
         except Exception as e:
             logger.warning(f"Failed to start metrics server: {e}")
         

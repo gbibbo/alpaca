@@ -9,16 +9,20 @@ NEW: Prometheus metrics integration for observability
 import os
 import sys
 import asyncio
+import uuid
+import subprocess
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import logging
 import json
+from pathlib import Path
+from enum import Enum
 
 # Add lib to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -104,11 +108,257 @@ class SignalHistoryResponse(BaseModel):
     total_count: int
     time_range: str
 
+# Backtest API Models
+class JobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+class BacktestRequest(BaseModel):
+    """Request model for creating a new backtest"""
+    symbols: List[str]
+    start_date: str  # ISO format
+    end_date: Optional[str] = None
+    timeframe: str = "1Min"
+    feed: str = "iex"
+    seed: Optional[int] = None
+    speed_multiplier: float = 10.0  # Default to fast backtesting
+    strategies: List[str] = ["random_50_50", "smart_technical"]
+    initial_cash: float = 100000.0
+    risk_params: Optional[Dict[str, Any]] = None
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "symbols": ["AAPL", "GOOGL"],
+                "start_date": "2022-01-01",
+                "end_date": "2022-01-31",
+                "timeframe": "1Min",
+                "feed": "iex",
+                "seed": 42,
+                "speed_multiplier": 10.0,
+                "strategies": ["random_50_50"],
+                "initial_cash": 50000.0
+            }
+        }
+
+class BacktestJob(BaseModel):
+    """Backtest job model"""
+    job_id: str
+    status: JobStatus
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    config: BacktestRequest
+    results: Optional[Dict[str, Any]] = None
+    progress: float = 0.0  # 0.0 to 100.0
+
+    class Config:
+        use_enum_values = True
+
 # Global state
 bus = None
 signal_history = []
 system_events = []
 startup_time = datetime.utcnow()
+
+# Backtest Job Manager
+class JobManager:
+    """Manages backtest job lifecycle"""
+
+    def __init__(self):
+        self.jobs: Dict[str, BacktestJob] = {}
+        self.running_processes: Dict[str, asyncio.subprocess.Process] = {}
+        self.max_concurrent_jobs = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))
+
+        # Results directory
+        self.results_dir = Path("data/backtest_results")
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"JobManager initialized with max {self.max_concurrent_jobs} concurrent jobs")
+
+    def create_job(self, config: BacktestRequest) -> str:
+        """Create a new backtest job"""
+        job_id = str(uuid.uuid4())
+
+        job = BacktestJob(
+            job_id=job_id,
+            status=JobStatus.QUEUED,
+            created_at=datetime.utcnow(),
+            config=config
+        )
+
+        self.jobs[job_id] = job
+
+        if METRICS.get('trading_orders'):  # Using existing counter for jobs
+            METRICS['trading_orders'].labels(symbol="BACKTEST", side="JOB", status="created").inc()
+
+        logger.info(f"Created backtest job {job_id} for symbols {config.symbols}")
+        return job_id
+
+    def get_job(self, job_id: str) -> Optional[BacktestJob]:
+        """Get job by ID"""
+        return self.jobs.get(job_id)
+
+    def list_jobs(self, status: Optional[JobStatus] = None, limit: int = 50) -> List[BacktestJob]:
+        """List jobs with optional filtering"""
+        jobs = list(self.jobs.values())
+
+        if status:
+            jobs = [j for j in jobs if j.status == status]
+
+        # Sort by creation time (newest first)
+        jobs.sort(key=lambda j: j.created_at, reverse=True)
+
+        return jobs[:limit]
+
+    async def start_job(self, job_id: str) -> bool:
+        """Start a backtest job"""
+        job = self.jobs.get(job_id)
+        if not job:
+            return False
+
+        if job.status != JobStatus.QUEUED:
+            logger.warning(f"Job {job_id} is not queued (status: {job.status})")
+            return False
+
+        # Check concurrent job limit
+        running_count = len([j for j in self.jobs.values() if j.status == JobStatus.RUNNING])
+        if running_count >= self.max_concurrent_jobs:
+            logger.warning(f"Cannot start job {job_id}: {running_count} jobs already running")
+            return False
+
+        try:
+            # Update job status
+            job.status = JobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+
+            # Build simulator command
+            cmd = self._build_simulator_command(job_id, job.config)
+
+            # Start subprocess
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=Path(__file__).parent.parent.parent
+            )
+
+            self.running_processes[job_id] = process
+
+            # Monitor process in background
+            asyncio.create_task(self._monitor_job(job_id, process))
+
+            logger.info(f"Started backtest job {job_id} with PID {process.pid}")
+            return True
+
+        except Exception as e:
+            job.status = JobStatus.FAILED
+            job.error_message = str(e)
+            job.completed_at = datetime.utcnow()
+
+            logger.error(f"Failed to start job {job_id}: {e}")
+            return False
+
+    def _build_simulator_command(self, job_id: str, config: BacktestRequest) -> List[str]:
+        """Build simulator command line"""
+        cmd = [
+            "python", "apps/simulator/main.py",
+            "--symbols", ",".join(config.symbols),
+            "--start", config.start_date,
+            "--timeframe", config.timeframe,
+            "--feed", config.feed,
+            "--speed", str(config.speed_multiplier),
+            "--output", str(self.results_dir / f"{job_id}_results.json"),
+            "--no-delays"  # Fast backtesting
+        ]
+
+        if config.end_date:
+            cmd.extend(["--end", config.end_date])
+
+        if config.seed is not None:
+            cmd.extend(["--seed", str(config.seed)])
+
+        return cmd
+
+    async def _monitor_job(self, job_id: str, process: asyncio.subprocess.Process):
+        """Monitor job execution"""
+        job = self.jobs[job_id]
+
+        try:
+            # Wait for process to complete
+            stdout, stderr = await process.communicate()
+
+            # Update job based on exit code
+            if process.returncode == 0:
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.utcnow()
+                job.progress = 100.0
+
+                # Load results if available
+                results_file = self.results_dir / f"{job_id}_results.json"
+                if results_file.exists():
+                    try:
+                        with open(results_file) as f:
+                            job.results = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Failed to load results for job {job_id}: {e}")
+
+                logger.info(f"Job {job_id} completed successfully")
+
+            else:
+                job.status = JobStatus.FAILED
+                job.completed_at = datetime.utcnow()
+                job.error_message = stderr.decode() if stderr else "Unknown error"
+                job.progress = 100.0
+
+                logger.error(f"Job {job_id} failed with code {process.returncode}")
+
+        except Exception as e:
+            job.status = JobStatus.FAILED
+            job.completed_at = datetime.utcnow()
+            job.error_message = str(e)
+            job.progress = 100.0
+
+            logger.error(f"Error monitoring job {job_id}: {e}")
+
+        finally:
+            # Cleanup
+            if job_id in self.running_processes:
+                del self.running_processes[job_id]
+
+    async def cancel_job(self, job_id: str) -> bool:
+        """Cancel a running job"""
+        job = self.jobs.get(job_id)
+        if not job:
+            return False
+
+        if job.status != JobStatus.RUNNING:
+            return False
+
+        process = self.running_processes.get(job_id)
+        if process:
+            try:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+
+            job.status = JobStatus.CANCELLED
+            job.completed_at = datetime.utcnow()
+            job.progress = 100.0
+
+            logger.info(f"Cancelled job {job_id}")
+            return True
+
+        return False
+
+# Global job manager
+job_manager = JobManager()
 
 # NEW: WebSocket connection manager
 class ConnectionManager:
@@ -200,8 +450,8 @@ app = FastAPI(
 # Add Prometheus instrumentation
 instrumentator.instrument(app).expose(app, endpoint="/metrics")
 
-# NEW: Setup templates for dashboard
-templates = Jinja2Templates(directory="apps/api/templates")
+# NEW: Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # NEW: Background task to update system metrics
 async def update_system_metrics():
@@ -247,15 +497,11 @@ async def update_system_metrics():
             await asyncio.sleep(30)
 
 # NEW: Dashboard and WebSocket endpoints
+@app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    """Serve the real-time dashboard"""
-    try:
-        with open("apps/api/templates/dashboard.html", "r") as f:
-            html_content = f.read()
-        return HTMLResponse(content=html_content)
-    except FileNotFoundError:
-        return HTMLResponse(content="<h1>Dashboard template not found</h1><p>Please ensure dashboard.html exists in apps/api/templates/</p>")
+    """Serve the main trading system UI"""
+    return FileResponse("static/index.html")
 
 @app.websocket("/ws/dashboard")
 async def websocket_endpoint(websocket: WebSocket):
@@ -753,6 +999,173 @@ async def monitor_signals():
         logger.error(f"Error monitoring signals: {e}")
         if METRICS.get('custom_errors'):
             METRICS['custom_errors'].labels(service='api', error_type='signal_monitoring').inc()
+
+# Backtest API Endpoints
+@app.post("/backtest/jobs", response_model=Dict[str, str])
+async def create_backtest_job(
+    request: BacktestRequest,
+    background_tasks: BackgroundTasks,
+    auto_start: bool = False
+):
+    """Create a new backtest job"""
+    try:
+        job_id = job_manager.create_job(request)
+
+        if auto_start:
+            # Try to start immediately
+            background_tasks.add_task(job_manager.start_job, job_id)
+
+        return {"job_id": job_id, "status": "created"}
+
+    except Exception as e:
+        logger.error(f"Failed to create backtest: {e}")
+        if METRICS.get('custom_errors'):
+            METRICS['custom_errors'].labels(service='api', error_type='backtest_creation').inc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/backtest/jobs", response_model=List[BacktestJob])
+async def list_backtest_jobs(
+    status: Optional[JobStatus] = None,
+    limit: int = 50
+):
+    """List backtest jobs"""
+    try:
+        jobs = job_manager.list_jobs(status=status, limit=limit)
+        return jobs
+    except Exception as e:
+        logger.error(f"Failed to list backtest jobs: {e}")
+        if METRICS.get('custom_errors'):
+            METRICS['custom_errors'].labels(service='api', error_type='backtest_list').inc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/backtest/jobs/{job_id}", response_model=BacktestJob)
+async def get_backtest_job(job_id: str):
+    """Get backtest job status and details"""
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+@app.post("/backtest/jobs/{job_id}/start")
+async def start_backtest_job(job_id: str):
+    """Start a queued backtest job"""
+    if not job_manager.get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    success = await job_manager.start_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot start job")
+
+    return {"status": "started"}
+
+@app.post("/backtest/jobs/{job_id}/cancel")
+async def cancel_backtest_job(job_id: str):
+    """Cancel a running backtest job"""
+    if not job_manager.get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    success = await job_manager.cancel_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot cancel job")
+
+    return {"status": "cancelled"}
+
+@app.get("/backtest/jobs/{job_id}/results")
+async def get_backtest_results(job_id: str):
+    """Get backtest job results"""
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Job not completed")
+
+    if not job.results:
+        raise HTTPException(status_code=404, detail="Results not available")
+
+    return job.results
+
+@app.get("/backtest/jobs/{job_id}/download")
+async def download_backtest_results(job_id: str):
+    """Download backtest results as JSON file"""
+    from fastapi.responses import FileResponse
+
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    results_file = job_manager.results_dir / f"{job_id}_results.json"
+    if not results_file.exists():
+        raise HTTPException(status_code=404, detail="Results file not found")
+
+    return FileResponse(
+        path=str(results_file),
+        filename=f"backtest_{job_id}_results.json",
+        media_type="application/json"
+    )
+
+@app.get("/backtest/stats")
+async def get_backtest_stats():
+    """Get backtest system statistics"""
+    jobs = job_manager.jobs.values()
+
+    stats = {
+        "total_jobs": len(jobs),
+        "status_counts": {},
+        "running_jobs": len([j for j in jobs if j.status == JobStatus.RUNNING]),
+        "max_concurrent": job_manager.max_concurrent_jobs,
+        "results_directory": str(job_manager.results_dir)
+    }
+
+    # Count by status
+    for status in JobStatus:
+        stats["status_counts"][status.value] = len([j for j in jobs if j.status == status])
+
+    return stats
+
+@app.post("/backtest/quick")
+async def quick_backtest(
+    symbols: str = "AAPL,GOOGL",
+    days: int = 30,
+    seed: Optional[int] = None
+):
+    """Create and start a quick backtest for testing"""
+    try:
+        from datetime import date
+
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days)
+
+        config = BacktestRequest(
+            symbols=symbols.split(","),
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            timeframe="1Day",
+            seed=seed,
+            speed_multiplier=1.0,  # Fast execution
+            strategies=["random_50_50"]
+        )
+
+        job_id = job_manager.create_job(config)
+
+        # Start immediately
+        success = await job_manager.start_job(job_id)
+
+        return {
+            "job_id": job_id,
+            "status": "started" if success else "failed_to_start",
+            "config": {
+                "symbols": config.symbols,
+                "date_range": f"{start_date} to {end_date}",
+                "seed": seed
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to create quick backtest: {e}")
+        if METRICS.get('custom_errors'):
+            METRICS['custom_errors'].labels(service='api', error_type='quick_backtest').inc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

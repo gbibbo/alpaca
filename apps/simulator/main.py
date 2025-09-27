@@ -25,6 +25,24 @@ from lib.models import Bar, TimeFrame
 from lib.bus import connect_bus, get_bus
 from lib.settings import get_settings
 from lib.time_utils import TimeUtils
+from lib.metrics_helpers import (
+    ServiceMetrics, start_metrics_server, BusMetrics,
+    Counter, TRADING_REGISTRY
+)
+
+# Simulator-specific metrics
+BARS_PUBLISHED = Counter(
+    'trading_simulator_bars_published_total',
+    'Total number of bars published by simulator',
+    ['symbol'],
+    registry=TRADING_REGISTRY
+)
+
+SIM_TICKS_TOTAL = Counter(
+    'trading_simulator_ticks_total',
+    'Total number of simulation ticks processed',
+    registry=TRADING_REGISTRY
+)
 
 # Configure logging
 logging.basicConfig(
@@ -205,6 +223,27 @@ class HistoricalSimulator:
         self.data_loader = AlpacaDataLoader()
         self.bus = None
         self.running = False
+
+        # Initialize metrics
+        self.metrics = ServiceMetrics('simulator')
+
+        # Start metrics server
+        try:
+            metrics_port = int(os.getenv("SIMULATOR_METRICS_PORT", "8014"))
+            start_metrics_server(metrics_port)
+            logger.info(f"📊 Simulator metrics available at http://localhost:{metrics_port}/metrics")
+        except OSError as e:
+            if getattr(e, "errno", None) == 98:  # Address already in use
+                try:
+                    metrics_port = find_available_port(metrics_port + 1)
+                    start_metrics_server(metrics_port)
+                    logger.warning(f"Metrics port busy. Using fallback http://localhost:{metrics_port}/metrics")
+                except Exception as fallback_error:
+                    logger.warning(f"Failed to start metrics server on fallback port: {fallback_error}")
+            else:
+                logger.warning(f"Failed to start metrics server: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to start metrics server: {e}")
         self.stats = {
             'bars_published': 0,
             'start_time': None,
@@ -231,7 +270,22 @@ class HistoricalSimulator:
         )
         
         return True
-    
+
+    def set_random_seed(self, seed: int):
+        """Set random seed and publish to strategies"""
+        if seed is not None:
+            logger.info(f"Setting random seed: {seed}")
+
+            # Publish seed configuration to strategies
+            self.bus.publish_system_event(
+                event_type="strategy_config",
+                source="simulator",
+                data={
+                    "random_seed": seed,
+                    "config_type": "reproducible_mode"
+                }
+            )
+
     async def simulate_symbol(self, symbol: str, bars: List[Bar], 
                             real_time_delay: bool = True) -> int:
         """
@@ -266,6 +320,10 @@ class HistoricalSimulator:
             # Publish bar to message bus
             self.bus.publish_bar(bar)
             bars_published += 1
+
+            # Record metrics
+            BARS_PUBLISHED.labels(symbol=bar.symbol).inc()
+            SIM_TICKS_TOTAL.inc()
             
             # Log progress periodically
             if bars_published % 100 == 0:
@@ -371,6 +429,7 @@ async def main():
     parser.add_argument("--no-delays", action="store_true", help="Disable real-time delays (publish as fast as possible)")
     parser.add_argument("--csv", help="Load data from CSV files directory instead of Alpaca")
     parser.add_argument("--output", help="Save simulation results to JSON file")
+    parser.add_argument("--seed", type=int, help="Random seed for reproducible strategy results")
     
     args = parser.parse_args()
     
@@ -385,6 +444,10 @@ async def main():
         if not simulator.connect():
             logger.error("Failed to connect to message bus")
             return 1
+
+        # Set random seed if provided
+        if args.seed is not None:
+            simulator.set_random_seed(args.seed)
         
         # Load data for all symbols
         symbol_data = {}
