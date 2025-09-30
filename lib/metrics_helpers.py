@@ -2,28 +2,39 @@
 """
 lib/metrics_helpers.py
 Prometheus Metrics Helpers for Trading Platform
-Implements ChatGPT's recommended observability patterns with standard metrics
+Implements observability patterns with standard metrics and safe, idempotent
+startup for the embedded metrics HTTP server (compatible with callers that
+pass a `registry` kwarg).
 """
 
 import os
 import logging
 import threading
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple
+
 from prometheus_client import (
     Counter, Histogram, Gauge, Summary, Info,
-    CollectorRegistry, MetricsHandler, start_http_server,
-    generate_latest, CONTENT_TYPE_LATEST
+    CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST, start_http_server,
 )
-from fastapi import FastAPI, Response
-from fastapi.responses import PlainTextResponse
+
+try:
+    # Optional (only used if you integrate with a web app)
+    from fastapi import FastAPI, Response
+    from fastapi.responses import PlainTextResponse
+except Exception:  # pragma: no cover - keep import-time optional
+    FastAPI = None
+    Response = None
+    PlainTextResponse = None
 
 logger = logging.getLogger(__name__)
 
+# -----------------------------------------------------------------------------
 # Global registry for metrics
+# -----------------------------------------------------------------------------
 TRADING_REGISTRY = CollectorRegistry()
 
-# Track started metric servers to prevent port conflicts
-_started_ports = set()
+# Track started metric servers to prevent port conflicts / duplicate starts
+_started_bindings: set[Tuple[str, int]] = set()
 _port_lock = threading.Lock()
 
 # =============================================================================
@@ -236,102 +247,113 @@ MEMORY_USAGE = Gauge(
 )
 
 # =============================================================================
-# HELPER FUNCTIONS
+# SAFE / IDEMPOTENT METRICS SERVER STARTUP
 # =============================================================================
 
-def start_metrics_server(port: int = 8000) -> threading.Thread:
+def _start_http_server_safe(
+    port: int,
+    addr: str = "0.0.0.0",
+    registry: Optional[CollectorRegistry] = None
+) -> None:
     """
-    Start Prometheus metrics server for headless services
-    Returns the server thread for control
+    Backwards-compatible, idempotent wrapper to start the Prometheus HTTP server.
+
+    - Accepts `registry` kwarg to match callers using a custom CollectorRegistry.
+    - Idempotent: repeated calls with the same (addr, port) are ignored.
+    - Swallows EADDRINUSE to avoid crashing multi-thread/multi-start paths.
     """
+    reg = registry or TRADING_REGISTRY
+    binding = (addr, int(port))
+
     with _port_lock:
-        if port in _started_ports:
-            logger.info(f"📊 Metrics server already running on port {port}, skipping")
-            # Return a dummy thread to maintain API compatibility
-            dummy_thread = threading.Thread(target=lambda: None)
-            dummy_thread.start()
-            return dummy_thread
-
+        if binding in _started_bindings:
+            logger.info("📊 Metrics server already active on %s:%s, skipping", addr, port)
+            return
         try:
-            # Start HTTP server in background thread
-            server_thread = threading.Thread(
-                target=start_http_server,
-                args=(port,),
-                kwargs={'registry': TRADING_REGISTRY},
-                daemon=True,
-                name=f"metrics-server-{port}"
-            )
-            server_thread.start()
-            _started_ports.add(port)
-
-            logger.info(f"✅ Prometheus metrics server started on port {port}")
-            logger.info(f"📊 Metrics available at: http://localhost:{port}/metrics")
-
-            return server_thread
-
+            # prometheus_client's embedded HTTP server sets the official
+            # Content-Type: text/plain; version=0.0.4; charset=utf-8
+            start_http_server(port=port, addr=addr, registry=reg)
+            _started_bindings.add(binding)
+            logger.info("✅ Prometheus metrics server started on %s:%s", addr, port)
+            logger.info("📊 Metrics available at: http://%s:%s/metrics", "localhost", port)
         except OSError as e:
-            if e.errno == 98:  # Address already in use
-                logger.warning(f"⚠️ Metrics port {port} already in use, skipping")
-                _started_ports.add(port)  # Mark as used to prevent retries
-                dummy_thread = threading.Thread(target=lambda: None)
-                dummy_thread.start()
-                return dummy_thread
-            raise
-        except Exception as e:
-            logger.error(f"❌ Failed to start metrics server on port {port}: {e}")
+            # EADDRINUSE on Linux is errno 98
+            if getattr(e, "errno", None) in (98, 48):  # 48 = macOS EADDRINUSE
+                logger.warning("⚠️ Metrics port already in use on %s:%s; continuing", addr, port)
+                _started_bindings.add(binding)
+            else:
+                logger.exception("❌ Failed to start metrics server on %s:%s", addr, port)
+                raise
+        except Exception:
+            logger.exception("❌ Unexpected error starting metrics server on %s:%s", addr, port)
             raise
 
-def metrics_app() -> FastAPI:
+def start_metrics_server(port: int = 8000, addr: str = "0.0.0.0") -> threading.Thread:
     """
-    Create FastAPI app with /metrics endpoint for web services
-    Use this for services that already have FastAPI apps
+    Public helper to start the metrics server in a background thread.
+    Returns a Thread handle (no-ops if already running for the same binding).
     """
+    thread = threading.Thread(
+        target=_start_http_server_safe,
+        kwargs={"port": port, "addr": addr, "registry": TRADING_REGISTRY},
+        name=f"metrics-server-{port}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+# =============================================================================
+# FASTAPI INTEGRATION (optional)
+# =============================================================================
+
+def metrics_app() -> "FastAPI":
+    """
+    Create a minimal FastAPI app that exposes /metrics using the shared registry.
+    Only available if FastAPI is installed.
+    """
+    if FastAPI is None:
+        raise RuntimeError("FastAPI not available. Install fastapi to use metrics_app().")
+
     app = FastAPI(title="Trading Metrics", version="1.0.0")
 
     @app.get("/metrics", response_class=PlainTextResponse)
     async def get_metrics():
-        """Prometheus metrics endpoint"""
         try:
-            metrics_data = generate_latest(TRADING_REGISTRY)
-            return Response(
-                content=metrics_data,
-                media_type=CONTENT_TYPE_LATEST
-            )
+            data = generate_latest(TRADING_REGISTRY)
+            return Response(content=data, media_type=CONTENT_TYPE_LATEST)
         except Exception as e:
-            logger.error(f"Error generating metrics: {e}")
+            logger.error("Error generating metrics: %s", e)
             return Response(
                 content=f"# Error generating metrics: {e}\n",
                 media_type=CONTENT_TYPE_LATEST,
-                status_code=500
+                status_code=500,
             )
 
     @app.get("/health")
     async def health_check():
-        """Simple health check endpoint"""
         return {"status": "healthy", "metrics": "available"}
 
     logger.info("📊 FastAPI metrics app created with /metrics endpoint")
     return app
 
-def add_metrics_to_fastapi(app: FastAPI) -> None:
+def add_metrics_to_fastapi(app: "FastAPI") -> None:
     """
-    Add metrics endpoint to existing FastAPI app
+    Add a /metrics endpoint to an existing FastAPI app.
     """
+    if FastAPI is None:
+        raise RuntimeError("FastAPI not available. Install fastapi to use add_metrics_to_fastapi().")
+
     @app.get("/metrics", response_class=PlainTextResponse)
     async def get_metrics():
-        """Prometheus metrics endpoint"""
         try:
-            metrics_data = generate_latest(TRADING_REGISTRY)
-            return Response(
-                content=metrics_data,
-                media_type=CONTENT_TYPE_LATEST
-            )
+            data = generate_latest(TRADING_REGISTRY)
+            return Response(content=data, media_type=CONTENT_TYPE_LATEST)
         except Exception as e:
-            logger.error(f"Error generating metrics: {e}")
+            logger.error("Error generating metrics: %s", e)
             return Response(
                 content=f"# Error generating metrics: {e}\n",
                 media_type=CONTENT_TYPE_LATEST,
-                status_code=500
+                status_code=500,
             )
 
     logger.info("📊 Added /metrics endpoint to existing FastAPI app")
@@ -343,7 +365,7 @@ def add_metrics_to_fastapi(app: FastAPI) -> None:
 class MetricsTimer:
     """Context manager for timing operations"""
 
-    def __init__(self, histogram: Histogram, labels: Dict[str, str] = None):
+    def __init__(self, histogram: Histogram, labels: Optional[Dict[str, str]] = None):
         self.histogram = histogram
         self.labels = labels or {}
         self.timer = None
@@ -383,12 +405,12 @@ class ServiceMetrics:
         import time
         self.start_time = time.time()
         SERVICE_HEALTH.labels(service=self.service_name, component='main').set(1)
-        logger.info(f"📊 Service {self.service_name} metrics initialized")
+        logger.info("📊 Service %s metrics initialized", self.service_name)
 
     def mark_service_stop(self):
         """Mark service shutdown"""
         SERVICE_HEALTH.labels(service=self.service_name, component='main').set(0)
-        logger.info(f"📊 Service {self.service_name} metrics stopped")
+        logger.info("📊 Service %s metrics stopped", self.service_name)
 
     def update_uptime(self):
         """Update service uptime metric"""
@@ -407,7 +429,7 @@ class ServiceMetrics:
         except ImportError:
             logger.debug("psutil not available for memory metrics")
         except Exception as e:
-            logger.debug(f"Error updating memory usage: {e}")
+            logger.debug("Error updating memory usage: %s", e)
 
 class RiskManagerMetrics(ServiceMetrics):
     """Metrics helpers for Risk Manager"""
@@ -510,7 +532,7 @@ def get_metrics_summary() -> Dict[str, Any]:
         metrics_text = generate_latest(TRADING_REGISTRY).decode('utf-8')
         metrics_families = text_string_to_metric_families(metrics_text)
 
-        summary = {}
+        summary: Dict[str, Any] = {}
         for family in metrics_families:
             summary[family.name] = {
                 'type': family.type,
@@ -521,7 +543,7 @@ def get_metrics_summary() -> Dict[str, Any]:
         return summary
 
     except Exception as e:
-        logger.error(f"Error generating metrics summary: {e}")
+        logger.error("Error generating metrics summary: %s", e)
         return {"error": str(e)}
 
 def reset_metrics():
@@ -542,7 +564,7 @@ def find_available_port(start_port: int = 8000, max_attempts: int = 100) -> int:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(('localhost', port))
-                logger.debug(f"Port {port} is available for metrics server")
+                logger.debug("Port %s is available for metrics server", port)
                 return port
         except OSError:
             continue
@@ -554,12 +576,11 @@ def find_available_port(start_port: int = 8000, max_attempts: int = 100) -> int:
 # =============================================================================
 
 if __name__ == "__main__":
-    # Example usage for testing
     import time
 
     # Start metrics server
-    port = find_available_port(8000)
-    server = start_metrics_server(port)
+    port = int(os.getenv("METRICS_PORT", find_available_port(8000)))
+    start_metrics_server(port)
 
     # Create service metrics
     risk_metrics = RiskManagerMetrics()
@@ -573,7 +594,7 @@ if __name__ == "__main__":
     BusMetrics.message_consumed("signals", "signal", "risk_manager")
 
     print(f"Metrics server running on port {port}")
-    print("Check metrics at: http://localhost:{}/metrics".format(port))
+    print(f"Check metrics at: http://localhost:{port}/metrics")
     print("Press Ctrl+C to stop")
 
     try:

@@ -873,3 +873,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+# --- Back-compat para tests ---
+if 'AlpacaExecutor' not in globals() and 'EnhancedAlpacaExecutor' in globals():
+    AlpacaExecutor = EnhancedAlpacaExecutor

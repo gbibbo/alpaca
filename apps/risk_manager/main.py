@@ -696,3 +696,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+# --- Compat alias for tests ---
+RiskManager = EnhancedRiskManager
+__all__ = ['EnhancedRiskManager','RiskManager']

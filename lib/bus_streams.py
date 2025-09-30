@@ -11,10 +11,13 @@ import logging
 import os
 import time
 import socket
-from typing import Any, Callable, Dict, Optional, List, Tuple, Awaitable, AsyncGenerator
+import random
+import re
+from typing import Any, Callable, Dict, Optional, List, Tuple, Awaitable, AsyncGenerator, Iterator
 from datetime import datetime, timezone
 from lib.models import Bar, Signal, OrderIntent, OrderFill, MessageEvent
 from lib.time_utils import TimeUtils
+from lib.metrics_helpers import BusMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -52,23 +55,79 @@ class RedisStreamsBus:
             "system": "system_processors"
         }
 
-        # Generate unique consumer ID
+        # Generate unique consumer ID with microsecond precision
         hostname = socket.gethostname()
         pid = os.getpid()
-        self.consumer_id = f"{hostname}_{pid}_{int(time.time())}"
+        import uuid
+        self.consumer_id = f"{hostname}_{pid}_{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
 
         # Configuration
         self.max_stream_length = 10000
         self.consumer_timeout = 2000  # 2 seconds
         self.ack_timeout = 300000     # 5 minutes
 
+        # Reclaim configuration
+        self.reclaim_batch_size = 200
+        self.reclaim_max_iterations = 10
+        self.production_min_idle_ms = 10000  # 10 seconds for production
+
+        # Reclaim scheduling
+        self.last_reclaim_time = {}  # Per stream type
+        self.reclaim_interval = 10  # Reclaim every 10 seconds
+
         # Performance metrics
         self.messages_published = 0
         self.messages_consumed = 0
         self.messages_acked = 0
         self.stream_errors = 0
+        self.redeliveries_total = 0
+        self.reclaim_loops_total = 0
+        self.reclaim_no_progress_total = 0
+        self.batch_acks_total = 0
 
         logger.info(f"RedisStreamsBus initialized with consumer_id: {self.consumer_id}")
+
+    def _validate_stream_id(self, stream_id: str) -> bool:
+        """Validate Redis stream ID format (timestamp-sequence)"""
+        if not isinstance(stream_id, str):
+            return False
+        return bool(re.match(r'^\d+-\d+$', stream_id))
+
+    def _normalize_ids(self, ids: List[Any]) -> List[str]:
+        """Normalize message IDs to string list, filtering invalid ones"""
+        normalized = []
+        for msg_id in ids:
+            if isinstance(msg_id, (tuple, list)):
+                # Extract ID from tuple/list (msg_id, data)
+                id_str = str(msg_id[0]) if msg_id else ""
+            else:
+                id_str = str(msg_id)
+
+            if self._validate_stream_id(id_str):
+                normalized.append(id_str)
+            else:
+                logger.warning(f"Invalid stream ID format: {id_str}")
+
+        return normalized
+
+    def _get_min_idle_with_jitter(self, base_min_idle_ms: int) -> int:
+        """Get min_idle_ms with jitter to avoid thundering herd"""
+        if base_min_idle_ms <= 0:
+            return 0
+
+        # Add ±10% jitter
+        jitter = random.uniform(0.9, 1.1)
+        return int(base_min_idle_ms * jitter)
+
+    def _should_reclaim_now(self, stream_type: str) -> bool:
+        """Check if it's time to run reclaim for this stream type"""
+        now = time.time()
+        last_reclaim = self.last_reclaim_time.get(stream_type, 0)
+        return (now - last_reclaim) >= self.reclaim_interval
+
+    def _mark_reclaim_time(self, stream_type: str):
+        """Mark the last reclaim time for this stream type"""
+        self.last_reclaim_time[stream_type] = time.time()
 
     def connect(self) -> bool:
         """Connect to Redis and initialize streams"""
@@ -153,6 +212,10 @@ class RedisStreamsBus:
             )
 
             self.messages_published += 1
+
+            # Record metrics
+            BusMetrics.message_published(stream_name, payload.get('type', 'unknown'), 'streams_bus')
+
             logger.debug(f"Published to {stream_name}: {message_id}")
             return message_id
 
@@ -190,6 +253,9 @@ class RedisStreamsBus:
                         result.append((msg_id, msg_data))
                         self.messages_consumed += 1
 
+                        # Record metrics
+                        BusMetrics.message_consumed(stream_name, msg_data.get('type', 'unknown'), 'streams_consumer')
+
             return result
 
         except Exception as e:
@@ -202,27 +268,136 @@ class RedisStreamsBus:
         Acknowledge message processing
         Should only be called after successful processing
         """
+        return self.ack_many(stream_type, [message_id]) > 0
+
+    def ack_many(self, stream_type: str, message_ids: List[str]) -> int:
+        """
+        Acknowledge multiple messages in batch (reduces RTT)
+        Returns number of successfully ACKed messages
+        """
         stream_name = self.streams.get(stream_type)
         consumer_group = self.consumer_groups.get(stream_type)
 
         if not stream_name or not consumer_group:
             raise ValueError(f"Invalid stream configuration for: {stream_type}")
 
+        # Normalize and validate IDs
+        valid_ids = self._normalize_ids(message_ids)
+        if not valid_ids:
+            logger.warning(f"No valid message IDs to ACK for {stream_type}")
+            return 0
+
         try:
-            result = self.redis_client.xack(stream_name, consumer_group, message_id)
-            if result:
-                self.messages_acked += 1
-                logger.debug(f"ACKed message {message_id} in {stream_name}")
-            return bool(result)
+            # Use XACK with multiple IDs: XACK stream group id1 id2 id3...
+            result = self.redis_client.xack(stream_name, consumer_group, *valid_ids)
+
+            if result > 0:
+                self.messages_acked += result
+                self.batch_acks_total += 1
+
+                # Record metrics
+                for _ in range(result):
+                    BusMetrics.message_acked(stream_name, 'streams_consumer')
+
+                logger.debug(f"Batch ACKed {result}/{len(valid_ids)} messages in {stream_name}")
+
+            return result
 
         except Exception as e:
-            logger.error(f"Error ACKing message {message_id} in {stream_name}: {e}")
-            return False
+            logger.error(f"Error batch ACKing {len(valid_ids)} messages in {stream_name}: {e}")
+            return 0
 
-    def consume_pending(self, stream_type: str, min_idle_ms: int = None) -> List[Tuple[str, dict]]:
+    def xautoclaim_compat(self, stream_name: str, consumer_group: str, min_idle_ms: int,
+                          start_id: str = "0-0", count: int = 200) -> Tuple[str, List[str]]:
         """
-        Consume pending messages that have been claimed but not acknowledged
-        Used for recovering from failures
+        Compatible XAUTOCLAIM wrapper that normalizes different response formats
+        Returns (next_start_id, claimed_ids)
+        """
+        try:
+            # Note: JUSTID flag has compatibility issues with some Redis clients
+            # Skip JUSTID optimization and use regular XAUTOCLAIM directly
+            result = self.redis_client.xautoclaim(
+                stream_name, consumer_group, self.consumer_id,
+                min_idle_time=min_idle_ms, start_id=start_id, count=count
+            )
+
+            # Handle different return formats
+            if len(result) >= 2:
+                next_start = str(result[0])
+                claimed_entries = result[1]
+
+                # Extract IDs from entries
+                claimed_ids = []
+                if claimed_entries:
+                    for entry in claimed_entries:
+                        if isinstance(entry, (list, tuple)) and len(entry) >= 1:
+                            claimed_ids.append(str(entry[0]))
+
+                return next_start, self._normalize_ids(claimed_ids)
+
+            return "0-0", []
+
+        except Exception as e:
+            if "unknown command" in str(e).lower():
+                raise  # Re-raise to trigger fallback
+            logger.error(f"Error in XAUTOCLAIM: {e}")
+            return "0-0", []
+
+    def xpending_ids_paginated(self, stream_name: str, consumer_group: str,
+                              min_idle_ms: int, batch_size: int = 100) -> Iterator[List[str]]:
+        """
+        Paginated XPENDING + filter by idle time
+        Yields batches of message IDs ready for claiming
+        """
+        try:
+            start = "-"
+            iterations = 0
+            max_iterations = self.reclaim_max_iterations
+
+            while iterations < max_iterations:
+                pending_info = self.redis_client.xpending_range(
+                    stream_name, consumer_group, min=start, max="+", count=batch_size
+                )
+
+                if not pending_info:
+                    break
+
+                old_message_ids = []
+                last_id = None
+
+                for msg_info in pending_info:
+                    # Handle both namedtuple and dict formats
+                    if hasattr(msg_info, 'time_since_delivered'):
+                        idle_time = msg_info.time_since_delivered
+                        msg_id = msg_info.message_id
+                    elif isinstance(msg_info, dict):
+                        idle_time = msg_info.get('time_since_delivered', 0)
+                        msg_id = msg_info.get('message_id')
+                    else:
+                        continue
+
+                    last_id = msg_id
+                    if idle_time and idle_time >= min_idle_ms and msg_id:
+                        old_message_ids.append(str(msg_id))
+
+                if old_message_ids:
+                    yield self._normalize_ids(old_message_ids)
+
+                # Set next start point
+                if last_id:
+                    start = last_id
+                else:
+                    break
+
+                iterations += 1
+
+        except Exception as e:
+            logger.error(f"Error in paginated XPENDING: {e}")
+            return
+
+    def consume_pending(self, stream_type: str, min_idle_ms: int = None, count: int = 200) -> List[Tuple[str, dict]]:
+        """
+        Robust consume pending with XAUTOCLAIM and fallback to XPENDING+XCLAIM
         """
         stream_name = self.streams.get(stream_type)
         consumer_group = self.consumer_groups.get(stream_type)
@@ -230,107 +405,146 @@ class RedisStreamsBus:
         if not stream_name or not consumer_group:
             raise ValueError(f"Invalid stream configuration for: {stream_type}")
 
-        try:
-            min_idle = min_idle_ms or self.ack_timeout
+        # Use production min_idle with jitter if not specified
+        if min_idle_ms is None:
+            min_idle_ms = self._get_min_idle_with_jitter(self.production_min_idle_ms)
 
-            # Check Redis version for XAUTOCLAIM support
+        total_reclaimed = []
+        iterations = 0
+        max_iterations = self.reclaim_max_iterations
+
+        try:
+            # Check XAUTOCLAIM support
             if not hasattr(self, '_supports_xautoclaim'):
                 try:
                     info = self.redis_client.info()
                     ver = info.get("redis_version", "0.0.0")
                     maj, minr, *_ = [int(p) for p in ver.split(".")]
                     self._supports_xautoclaim = (maj > 6) or (maj == 6 and minr >= 2)
-                    logger.info(f"Redis {ver} - XAUTOCLAIM support: {self._supports_xautoclaim}")
+                    logger.debug(f"Redis {ver} - XAUTOCLAIM support: {self._supports_xautoclaim}")
                 except Exception:
                     self._supports_xautoclaim = False
 
-            if not self._supports_xautoclaim:
-                # For Redis < 6.2, implement manual reclaim with XPENDING + XCLAIM
-                logger.debug(f"Using manual reclaim for {stream_name} (Redis < 6.2)")
-                try:
-                    # Get pending messages
-                    pending_info = self.redis_client.xpending_range(
-                        stream_name, consumer_group,
-                        min='-', max='+', count=10
+            if self._supports_xautoclaim:
+                # Use XAUTOCLAIM with safeguards
+                start_id = "0-0"
+                seen_ids = set()
+
+                while iterations < max_iterations and len(total_reclaimed) < count:
+                    next_start, claimed_ids = self.xautoclaim_compat(
+                        stream_name, consumer_group, min_idle_ms, start_id,
+                        min(self.reclaim_batch_size, count - len(total_reclaimed))
                     )
 
-                    if not pending_info:
-                        return []
+                    if not claimed_ids:
+                        break
 
-                    # Filter by idle time
-                    old_messages = []
-                    for msg_info in pending_info:
-                        if msg_info.get('time_since_delivered', 0) > min_idle:
-                            old_messages.append(msg_info['message_id'])
+                    # Check for progress (avoid infinite loops)
+                    new_ids = [id for id in claimed_ids if id not in seen_ids]
+                    if not new_ids and next_start == start_id:
+                        self.reclaim_no_progress_total += 1
+                        logger.debug(f"No progress in XAUTOCLAIM for {stream_name}, stopping")
+                        break
 
-                    if not old_messages:
-                        return []
+                    seen_ids.update(claimed_ids)
 
-                    # Claim old messages to current consumer
-                    claimed = self.redis_client.xclaim(
-                        stream_name, consumer_group, self.consumer_id,
-                        min_idle_time=min_idle, message_ids=old_messages
-                    )
+                    # Get message data for claimed IDs
+                    if new_ids:
+                        try:
+                            messages = self.redis_client.xrange(stream_name, min=min(new_ids), max=max(new_ids))
+                            id_to_data = {msg_id: msg_data for msg_id, msg_data in messages}
 
-                    logger.info(f"Manually reclaimed {len(claimed)} pending messages from {stream_name}")
-                    return [(msg_id, msg_data) for msg_id, msg_data in claimed]
+                            for claimed_id in new_ids:
+                                if claimed_id in id_to_data:
+                                    total_reclaimed.append((claimed_id, id_to_data[claimed_id]))
+                                    self.redeliveries_total += 1
+                                    BusMetrics.bus_error(stream_name, 'redelivery', 'streams_consumer')
 
-                except Exception as e:
-                    logger.error(f"Error in manual reclaim for {stream_name}: {e}")
-                    return []
+                        except Exception as e:
+                            logger.error(f"Error getting message data for claimed IDs: {e}")
 
-            # Use XAUTOCLAIM to reclaim old pending messages
-            result = self.redis_client.xautoclaim(
-                stream_name,
-                consumer_group,
-                self.consumer_id,
-                min_idle_time=min_idle,
-                start_id="0-0",
-                count=10
-            )
+                    start_id = next_start
+                    iterations += 1
 
-            # Handle different return formats based on Redis version
-            if len(result) >= 2:
-                claimed_messages = result[1]
+            else:
+                # Fallback to manual XPENDING + XCLAIM
+                logger.debug(f"Using manual reclaim for {stream_name} (XAUTOCLAIM not available)")
 
-                if claimed_messages:
-                    logger.info(f"Reclaimed {len(claimed_messages)} pending messages from {stream_name}")
-                    return [(msg_id, msg_data) for msg_id, msg_data in claimed_messages]
+                for batch_ids in self.xpending_ids_paginated(stream_name, consumer_group, min_idle_ms):
+                    if not batch_ids or len(total_reclaimed) >= count:
+                        break
 
-            return []
+                    try:
+                        # Claim batch of IDs
+                        claimed = self.redis_client.xclaim(
+                            stream_name, consumer_group, self.consumer_id,
+                            min_idle_time=min_idle_ms, message_ids=batch_ids
+                        )
+
+                        for msg_id, msg_data in claimed:
+                            total_reclaimed.append((str(msg_id), msg_data))
+                            self.redeliveries_total += 1
+                            BusMetrics.bus_error(stream_name, 'redelivery', 'streams_consumer')
+
+                        iterations += 1
+
+                    except Exception as e:
+                        logger.error(f"Error in manual XCLAIM: {e}")
+                        break
+
+            if total_reclaimed:
+                self.reclaim_loops_total += 1
+                logger.info(f"Reclaimed {len(total_reclaimed)} pending messages from {stream_name} (idle >= {min_idle_ms}ms)")
+
+            return total_reclaimed
 
         except Exception as e:
-            if "unknown command `XAUTOCLAIM`" in str(e):
+            if "unknown command" in str(e).lower():
                 self._supports_xautoclaim = False
-                logger.warning(f"XAUTOCLAIM not supported, disabling pending recovery for {stream_name}")
+                logger.warning(f"XAUTOCLAIM not supported, will use manual reclaim for {stream_name}")
                 return []
             logger.error(f"Error consuming pending from {stream_name}: {e}")
             return []
 
     async def consume_with_handler(self, stream_type: str, handler: Callable[[dict], Awaitable[bool]]) -> None:
         """
-        Safe consumption loop with handler-controlled ACK
+        Safe consumption loop with handler-controlled ACK and scheduled reclaim
         Only ACKs messages after successful processing
+        Implements the reliable consumer pattern from T1.1 with production optimizations
         """
-        logger.info(f"Starting safe consumption of {stream_type} stream")
+        logger.info(f"Starting safe consumption of {stream_type} stream with scheduled reclaim (every {self.reclaim_interval}s)")
 
         consecutive_errors = 0
         max_consecutive_errors = 5
+        pending_ids_to_ack = []  # Batch ACK buffer
 
         while consecutive_errors < max_consecutive_errors:
             try:
-                # First, process any pending messages
-                pending_messages = self.consume_pending(stream_type)
-                for msg_id, msg_data in pending_messages:
-                    try:
-                        success = await handler(msg_data)
-                        if success:
-                            self.ack(stream_type, msg_id)
-                    except Exception as e:
-                        logger.error(f"Error processing pending message {msg_id}: {e}")
+                # Scheduled reclaim: only run periodically, not every iteration
+                if self._should_reclaim_now(stream_type):
+                    self._mark_reclaim_time(stream_type)
 
-                # Then consume new messages
-                new_messages = self.consume(stream_type, count=10)
+                    # Batch ACK any pending successful messages first
+                    if pending_ids_to_ack:
+                        acked_count = self.ack_many(stream_type, pending_ids_to_ack)
+                        logger.debug(f"Batch ACKed {acked_count} successful messages before reclaim")
+                        pending_ids_to_ack.clear()
+
+                    # Process pending messages with production min_idle_ms + jitter
+                    pending_messages = self.consume_pending(stream_type)
+
+                    for msg_id, msg_data in pending_messages:
+                        try:
+                            logger.debug(f"Processing reclaimed pending message {msg_id}")
+                            success = await handler(msg_data)
+                            if success:
+                                pending_ids_to_ack.append(msg_id)
+                                logger.debug(f"Marked reclaimed message {msg_id} for ACK")
+                        except Exception as e:
+                            logger.error(f"Error processing pending message {msg_id}: {e}")
+
+                # Consume new messages (XREADGROUP with BLOCK)
+                new_messages = self.consume(stream_type, count=100, block_ms=2000)
 
                 if new_messages:
                     consecutive_errors = 0
@@ -339,11 +553,22 @@ class RedisStreamsBus:
                         try:
                             success = await handler(msg_data)
                             if success:
-                                self.ack(stream_type, msg_id)
+                                pending_ids_to_ack.append(msg_id)
+                                logger.debug(f"Marked new message {msg_id} for ACK")
                             else:
                                 logger.warning(f"Handler failed for {msg_id}, message remains pending")
                         except Exception as e:
                             logger.error(f"Error in handler for message {msg_id}: {e}")
+
+                # Batch ACK successful messages periodically (every 50 messages or 5 seconds)
+                if len(pending_ids_to_ack) >= 50 or (
+                    pending_ids_to_ack and
+                    time.time() - self.last_reclaim_time.get(f"{stream_type}_ack", 0) >= 5
+                ):
+                    acked_count = self.ack_many(stream_type, pending_ids_to_ack)
+                    logger.debug(f"Batch ACKed {acked_count} successful messages")
+                    pending_ids_to_ack.clear()
+                    self.last_reclaim_time[f"{stream_type}_ack"] = time.time()
 
                 await asyncio.sleep(0.001)  # Small yield
 
@@ -356,6 +581,11 @@ class RedisStreamsBus:
                 else:
                     logger.error(f"Too many consecutive errors, stopping consumption of {stream_type}")
                     break
+
+        # Final batch ACK of any remaining successful messages
+        if pending_ids_to_ack:
+            acked_count = self.ack_many(stream_type, pending_ids_to_ack)
+            logger.info(f"Final batch ACKed {acked_count} successful messages")
 
     async def _ensure_group(self, stream: str, group: str) -> None:
         """Ensure a consumer group exists for a stream"""
@@ -590,7 +820,7 @@ class RedisStreamsBus:
 
     # Statistics and monitoring
     def get_stats(self) -> dict:
-        """Get comprehensive statistics"""
+        """Get comprehensive statistics including T1.2 metrics"""
         try:
             base_stats = {
                 "backend": "streams",
@@ -603,34 +833,61 @@ class RedisStreamsBus:
                 "ack_rate": self.messages_acked / max(1, self.messages_consumed)
             }
 
-            # Get stream-specific stats
+            # Get stream-specific stats with T1.2 metrics
             stream_info = {}
             for stream_type, stream_name in self.streams.items():
                 try:
                     length = self.redis_client.xlen(stream_name)
+                    consumer_group = self.consumer_groups[stream_type]
 
-                    # Get consumer group info
+                    # Get consumer group info including pending count
                     group_info = {}
+                    pending_count = 0
                     try:
                         groups = self.redis_client.xinfo_groups(stream_name)
                         for group in groups:
-                            if group['name'] == self.consumer_groups[stream_type]:
+                            if group['name'] == consumer_group:
+                                pending_count = group['pending']
                                 group_info = {
-                                    'pending': group['pending'],
+                                    'pending': pending_count,
                                     'consumers': group['consumers'],
                                     'last_delivered_id': group['last-delivered-id']
                                 }
+
+                                # Update Prometheus metrics for T1.2
+                                BusMetrics.update_pending_messages(stream_name, consumer_group, pending_count)
                                 break
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Error getting group info for {stream_name}: {e}")
+
+                    # Calculate lag (approximation based on stream length vs last delivered)
+                    lag = 0
+                    try:
+                        if group_info.get('last_delivered_id'):
+                            # Simple lag calculation - this is an approximation
+                            last_id = group_info['last_delivered_id']
+                            if '-' in last_id:
+                                last_seq = int(last_id.split('-')[1])
+                                # Get latest message ID to calculate lag
+                                latest_info = self.redis_client.xinfo_stream(stream_name)
+                                if latest_info.get('last-generated-id'):
+                                    latest_id = latest_info['last-generated-id']
+                                    if '-' in latest_id:
+                                        latest_seq = int(latest_id.split('-')[1])
+                                        lag = max(0, latest_seq - last_seq)
+                    except Exception as e:
+                        logger.debug(f"Error calculating lag for {stream_name}: {e}")
 
                     stream_info[stream_type] = {
                         "name": stream_name,
                         "length": length,
+                        "lag": lag,
+                        "pending": pending_count,
                         "group_info": group_info
                     }
-                except:
-                    stream_info[stream_type] = {"name": stream_name, "length": 0}
+                except Exception as e:
+                    logger.debug(f"Error getting stats for {stream_name}: {e}")
+                    stream_info[stream_type] = {"name": stream_name, "length": 0, "lag": 0, "pending": 0}
 
             base_stats["streams"] = stream_info
             return base_stats

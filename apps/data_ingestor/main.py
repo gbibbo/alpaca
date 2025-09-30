@@ -19,6 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from lib.models import Bar, TimeFrame
 from lib.bus import get_bus, connect_bus
 from lib.settings import get_settings
+from lib.metrics_helpers import (
+    ServiceMetrics, start_metrics_server, find_available_port,
+    BusMetrics
+)
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame as AlpacaTimeFrame
@@ -40,6 +44,32 @@ class AlpacaDataIngestor:
         self.data_client = None
         self.bus = get_bus()
         self.running = False
+
+        # Initialize metrics
+        self.metrics = ServiceMetrics('data_ingestor')
+
+        # Start metrics server
+        try:
+            metrics_port = int(os.getenv("DATA_INGESTOR_METRICS_PORT", "8013"))
+            start_metrics_server(metrics_port)
+            logger.info(f"📊 Data Ingestor metrics available at http://localhost:{metrics_port}/metrics")
+        except OSError as e:
+            if getattr(e, "errno", None) == 98:  # Address already in use
+                try:
+                    metrics_port = find_available_port(metrics_port + 1)
+                    start_metrics_server(metrics_port)
+                    logger.warning(f"Metrics port busy. Using fallback http://localhost:{metrics_port}/metrics")
+                except Exception as fallback_error:
+                    logger.warning(f"Failed to start metrics server on fallback port: {fallback_error}")
+            else:
+                logger.warning(f"Failed to start metrics server: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to start metrics server: {e}")
+
+        # Performance tracking
+        self.bars_published = 0
+        self.historical_bars_published = 0
+        self.live_bars_published = 0
         
         # Data feed configuration - use IEX for paper trading accounts
         self.data_feed = os.getenv("ALPACA_DATA_FEED", "iex")
@@ -106,6 +136,10 @@ class AlpacaDataIngestor:
                         self.bus.publish_bar(bar)
                         bars_count += 1
                         total_bars_published += 1
+                        self.historical_bars_published += 1
+
+                        # Record metrics
+                        BusMetrics.message_published("bars", "bar", "data_ingestor")
                     
                     logger.info(f"Published {bars_count} historical bars for {symbol}")
                 else:
@@ -177,6 +211,12 @@ class AlpacaDataIngestor:
                             # Publish latest bar
                             self.bus.publish_bar(bar)
                             bars_published += 1
+                            self.live_bars_published += 1
+                            self.bars_published += 1
+
+                            # Record metrics
+                            BusMetrics.message_published("bars", "bar", "data_ingestor")
+
                             logger.debug(f"Published live bar for {symbol}: ${bar.close}")
                             
                     except Exception as e:
@@ -209,6 +249,9 @@ class AlpacaDataIngestor:
         if not connect_bus():
             logger.error("Failed to connect to message bus")
             return False
+
+        # Mark service start in metrics
+        self.metrics.mark_service_start()
         
         # Publish service start event
         self.bus.publish_system_event(
@@ -249,6 +292,15 @@ class AlpacaDataIngestor:
         """Stop the data ingestor"""
         logger.info("Stopping data ingestor...")
         self.running = False
+
+        # Mark service stop in metrics
+        self.metrics.mark_service_stop()
+
+        # Log final statistics
+        logger.info(f"Final Statistics:")
+        logger.info(f"  Historical bars published: {self.historical_bars_published}")
+        logger.info(f"  Live bars published: {self.live_bars_published}")
+        logger.info(f"  Total bars published: {self.bars_published}")
         
         # Publish service stop event
         if self.bus:

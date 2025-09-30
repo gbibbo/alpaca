@@ -13,6 +13,22 @@ A comprehensive, microservices-based algorithmic trading platform built with Pyt
 - **🔧 Crash Recovery Testing**: Automated pending message reclaim validation
 - **📊 PnL Aggregation**: Real-time portfolio tracking with CSV/JSON export capabilities
 
+## ✅ Epic 1 & 2 Implementation Status
+
+**Epic 1 — Message Bus & Redis Streams:**
+- Verified with `scripts/qa/streams_low_level_check.py` (shows `PASS` with `pending=0`)
+- Safe consumption with *consumer groups* and ACK after processing (see "QA / Testing" section)
+- Automatic message recovery with `XAUTOCLAIM` (Redis 6.2+) or manual reclaim (Redis 6.0-6.1)
+
+**Epic 2 — Observability & Prometheus Metrics:**
+- Unified metrics in `lib/metrics_helpers.py` with global `CollectorRegistry` (`TRADING_REGISTRY`)
+- **Origin endpoints** exposed by services:
+  - `risk_manager` → `http://127.0.0.1:8011/metrics`
+  - `executor`     → `http://127.0.0.1:8012/metrics`
+- **Sidecar re-export** with **strict Content-Type** `text/plain; version=0.0.4; charset=utf-8`:
+  - `risk_manager` (sidecar) → `http://127.0.0.1:9911/metrics`
+  - `executor`     (sidecar) → `http://127.0.0.1:9912/metrics`
+
 ## 🏗️ Architecture
 
 ```
@@ -108,6 +124,8 @@ The platform implements a distributed architecture where each component communic
 - Redis Server 6.0+ (optional - automatic FakeRedis fallback available)
 - Alpaca Markets Account (Paper Trading) - optional for CSV-based testing
 - `lsof` utility (recommended)
+- **Prometheus client (Python)** for metrics exposure
+- (Optional) `lsof`, `curl`, `sed` for QA utilities
 - 8GB RAM minimum
 - Linux/macOS/WSL2/Windows
 
@@ -115,6 +133,16 @@ The platform implements a distributed architecture where each component communic
 - **Redis 6.2+**: Full feature support including `XAUTOCLAIM` for automatic message recovery
 - **Redis 6.0-6.1**: Compatible with manual consumer group management (automatic recovery disabled)
 - **No Redis**: Automatic FakeRedis fallback for development
+
+### Recommended Environment Variables
+
+```bash
+export REDIS_URL="redis://localhost:6379/0"
+export BUS_BACKEND=streams
+# Force real Redis during QA (avoid fallback to fakeredis)
+unset FORCE_FAKE_REDIS FAKE_REDIS
+export USE_FAKE_REDIS=0
+```
 
 ## 🛠️ Installation
 
@@ -392,6 +420,17 @@ tail -f logs/data_ingestor.log
 | **API Metrics** | http://127.0.0.1:8016/metrics | None | API service metrics |
 | **Grafana** | http://127.0.0.1:3000 | admin / trading123 | Advanced dashboard and alerting |
 
+## 🌐 Metrics Endpoints & Ports
+
+| Component | Port | URL | Notes |
+| --------- | :--: | --- | ----- |
+| Risk Manager (origin) | 8011 | `http://127.0.0.1:8011/metrics` | May respond 405 to `HEAD` (use `GET`) |
+| Executor (origin) | 8012 | `http://127.0.0.1:8012/metrics` | Same as above |
+| Sidecar Risk (strict) | 9911 | `http://127.0.0.1:9911/metrics` | CT: `text/plain; version=0.0.4; charset=utf-8` |
+| Sidecar Exec (strict) | 9912 | `http://127.0.0.1:9912/metrics` | CT: `text/plain; version=0.0.4; charset=utf-8` |
+
+> **Note:** Sidecars respond to `HEAD` and set the official header; origins expose metrics with Prometheus client `Content-Type`.
+
 ## 🏗️ System Components
 
 ### Data Ingestor (`apps/data_ingestor/`)
@@ -624,6 +663,45 @@ logs/
 
 ## 🧪 Testing & Validation
 
+### QA / Epic Validation
+
+#### 1) Low-level Streams Testing (Epic 1)
+
+Verifies consumer groups and ACK pattern correctness:
+
+```bash
+export REDIS_URL="redis://localhost:6379/0"
+python scripts/qa/streams_low_level_check.py
+# Should finish with: PASS (and pending=0)
+```
+
+#### 2) End-to-End Complete Testing (Epics 1+2)
+
+Script that starts/stops services, runs minimal simulation, starts sidecars and validates everything:
+
+```bash
+# Base environment (see previous section)
+export REDIS_URL="redis://localhost:6379/0"
+export BUS_BACKEND=streams
+unset FORCE_FAKE_REDIS FAKE_REDIS
+export USE_FAKE_REDIS=0
+
+bash scripts/qa/e2e_streams_pipeline.sh
+# Expected:
+#  - Origins 8011/8012: code=200 and Prometheus body
+#  - Sidecars 9911/9912: strict CT "text/plain; version=0.0.4; charset=utf-8"
+#  - "E2E PASS"
+```
+
+#### 3) Strict Sidecars Smoke Testing (Epic 2)
+
+Validates that sidecars return **200** with **Content-Type 0.0.4** and valid Prometheus body:
+
+```bash
+bash scripts/qa/metrics_smoke_strict.sh
+# Expected: both endpoints OK
+```
+
 ### System Events Testing
 
 Test the system events architecture and reproducible strategies:
@@ -774,6 +852,40 @@ open http://localhost:8000  # Trading UI
 ```
 
 ## 🔍 Troubleshooting
+
+### Metrics & Sidecars Issues
+
+**1) 502 in sidecar**
+
+* Usually indicates that the origin wasn't ready yet. Verify origins:
+
+  ```bash
+  curl -sI http://127.0.0.1:8011/metrics | tr -d '\r'
+  curl -sI http://127.0.0.1:8012/metrics | tr -d '\r'
+  ```
+* Check logs:
+
+  ```bash
+  tail -n +1 out/sidecar_*.log | sed -n '1,200p'
+  ```
+
+**2) `Address already in use` (8011/8012/9911/9912)**
+
+* Clean up ports and hanging processes:
+
+  ```bash
+  pkill -f "apps/risk_manager/main.py"    >/dev/null 2>&1 || true
+  pkill -f "apps/executor/main.py"        >/dev/null 2>&1 || true
+  pkill -f "scripts/qa/reexport_metrics.py" >/dev/null 2>&1 || true
+  lsof -tiTCP:8011,8012,9911,9912 -sTCP:LISTEN 2>/dev/null | xargs -r kill -9
+  ```
+
+**3) CRLF in scripts (Linux/macOS)**
+
+```bash
+sed -i 's/\r$//' scripts/qa/*.sh
+sed -i 's/\r$//' scripts/qa/*.py
+```
 
 ### Service Startup Issues
 ```bash
@@ -947,6 +1059,50 @@ The system publishes various event types through Redis:
 - **Credential Management**: Environment variable-based credential storage
 - **Process Isolation**: Individual service processes with controlled communication
 - **Safe Message Processing**: Messages acknowledged only after successful processing
+
+## 🔧 Recent Platform Changes
+
+### Standardized Metrics Architecture
+* **Unified metrics** in `lib/metrics_helpers.py` with global `CollectorRegistry` (`TRADING_REGISTRY`)
+* **Metrics sidecars** that re-export with **official Content-Type** for Prometheus:
+  `text/plain; version=0.0.4; charset=utf-8`
+* **Automated QA**:
+  * `streams_low_level_check.py` (Epic 1)
+  * `e2e_streams_pipeline.sh` + `metrics_smoke_strict.sh` (Epics 1+2)
+
+### Enhanced Redis Streams Implementation
+* **Safe consumer groups** with ACK-after-processing pattern
+* **Automatic message recovery** using `XAUTOCLAIM` (Redis 6.2+) or manual reclaim (Redis 6.0)
+* **System events architecture** for real-time configuration updates
+
+## ⚡ Quick Verification Commands
+
+```bash
+# 1) Cleanup
+pkill -f "apps/risk_manager/main.py" >/dev/null 2>&1 || true
+pkill -f "apps/executor/main.py"     >/dev/null 2>&1 || true
+pkill -f "scripts/qa/reexport_metrics.py" >/dev/null 2>&1 || true
+lsof -tiTCP:8011,8012,9911,9912 -sTCP:LISTEN 2>/dev/null | xargs -r kill -9
+
+# 2) Base environment (real Redis)
+export REDIS_URL="redis://localhost:6379/0"
+export BUS_BACKEND=streams
+unset FORCE_FAKE_REDIS FAKE_REDIS
+export USE_FAKE_REDIS=0
+
+# 3) Low-level Streams (Epic 1)
+python scripts/qa/streams_low_level_check.py
+
+# 4) E2E complete (Epics 1+2)
+bash scripts/qa/e2e_streams_pipeline.sh
+
+# 5) Strict sidecars smoke test (Epic 2)
+bash scripts/qa/metrics_smoke_strict.sh
+
+# 6) (Optional) Manual CT headers verification on sidecars
+curl -sI http://127.0.0.1:9911/metrics | tr -d '\r'
+curl -sI http://127.0.0.1:9912/metrics | tr -d '\r'
+```
 
 ## 🏗️ Development
 
