@@ -126,17 +126,22 @@ class AlpacaRateManager:
 
 
 class OrderTracker:
-    """Enhanced order tracking with partial fills support"""
-    
+    """Enhanced order tracking with FSM and partial fills support (Epic 5)"""
+
     def __init__(self):
         # Track orders by various IDs
         self.orders_by_client_id: Dict[str, Dict] = {}
         self.orders_by_broker_id: Dict[str, Dict] = {}
         self.pending_orders: Dict[str, OrderIntent] = {}
-        
+
         # Partial fill tracking
         self.partial_fills: Dict[str, List[Dict]] = {}  # broker_id -> list of fills
-        
+
+        # Epic 5: FSM tracking
+        from lib.order_fsm import OrderFSM
+        self.order_fsms: Dict[str, OrderFSM] = {}  # broker_id -> FSM
+        self.timeout_monitors: Dict[str, float] = {}  # broker_id -> last_check_time
+
         # Performance metrics
         self.orders_submitted = 0
         self.orders_filled = 0
@@ -144,7 +149,12 @@ class OrderTracker:
         self.orders_failed = 0
         
     def add_pending_order(self, order_intent: OrderIntent, broker_order_id: str):
-        """Add order to tracking"""
+        """Add order to tracking with FSM (Epic 5)"""
+        # Create FSM for order lifecycle management
+        from lib.order_fsm import create_fsm_from_order_intent
+        fsm = create_fsm_from_order_intent(order_intent, broker_order_id)
+        self.order_fsms[broker_order_id] = fsm
+
         order_data = {
             "intent": order_intent,
             "broker_id": broker_order_id,
@@ -152,26 +162,37 @@ class OrderTracker:
             "status": "submitted",
             "fills": [],
             "total_filled": Decimal('0'),
-            "remaining_quantity": order_intent.quantity
+            "remaining_quantity": order_intent.quantity,
+            "fsm": fsm  # Reference to FSM
         }
-        
+
         self.orders_by_client_id[order_intent.client_order_id] = order_data
         self.orders_by_broker_id[broker_order_id] = order_data
         self.pending_orders[broker_order_id] = order_intent
-        
+
         self.orders_submitted += 1
-        logger.debug(f"Tracking order: {order_intent.client_order_id} -> {broker_order_id}")
+        logger.debug(f"Tracking order with FSM: {order_intent.client_order_id} -> {broker_order_id} (state: {fsm.current_state})")
     
-    def update_order_status(self, broker_order_id: str, status: str, filled_qty: Decimal = None, 
+    def update_order_status(self, broker_order_id: str, status: str, filled_qty: Decimal = None,
                           fill_price: Decimal = None) -> Optional[OrderFill]:
-        """Update order status and handle fills"""
+        """Update order status using FSM (Epic 5)"""
         if broker_order_id not in self.orders_by_broker_id:
             logger.warning(f"Unknown order for status update: {broker_order_id}")
             return None
-        
+
         order_data = self.orders_by_broker_id[broker_order_id]
         order_intent = order_data["intent"]
-        
+
+        # Epic 5: Update FSM state
+        fsm = self.order_fsms.get(broker_order_id)
+        if fsm:
+            from lib.order_fsm import map_alpaca_status_to_event
+            event = map_alpaca_status_to_event(status)
+
+            if event:
+                fsm.transition(event, fill_quantity=filled_qty, fill_price=fill_price)
+                logger.debug(f"FSM updated for {broker_order_id}: {fsm.current_state}")
+
         order_data["status"] = status
         order_data["last_updated"] = MonotonicTimer.current()
         
@@ -226,7 +247,33 @@ class OrderTracker:
     def get_pending_orders(self) -> List[str]:
         """Get list of pending order broker IDs"""
         return list(self.pending_orders.keys())
-    
+
+    async def check_timeouts(self) -> List[str]:
+        """
+        Check and process order timeouts (Epic 5)
+        Returns list of broker_order_ids that timed out
+        """
+        timed_out_orders = []
+
+        for broker_id, fsm in list(self.order_fsms.items()):
+            if not fsm.is_terminal() and fsm.check_timeout():
+                timed_out_orders.append(broker_id)
+                logger.warning(
+                    f"⏰ Order {broker_id} timed out in state {fsm.current_state} "
+                    f"after {fsm.get_state_duration():.1f}s"
+                )
+
+                # Update order data
+                if broker_id in self.orders_by_broker_id:
+                    self.orders_by_broker_id[broker_id]["status"] = "expired"
+                    self.orders_by_broker_id[broker_id]["last_updated"] = MonotonicTimer.current()
+
+                # Remove from pending
+                self.pending_orders.pop(broker_id, None)
+                self.orders_failed += 1
+
+        return timed_out_orders
+
     def get_stats(self) -> Dict:
         """Get order tracking statistics"""
         return {
@@ -335,10 +382,12 @@ class EnhancedAlpacaExecutor:
                 
                 # Record successful API call
                 self.rate_manager.record_trading_call(operation)
-                
+
+                # Epic 4: Record successful retry after 429 (if this was a retry)
                 if attempt > 1:
                     logger.info(f"✅ {description} succeeded on attempt {attempt}")
-                
+                    self.metrics.broker_429_retry(operation, success=True)
+
                 return result
                 
             except Exception as e:
@@ -349,11 +398,17 @@ class EnhancedAlpacaExecutor:
                     # Rate limit hit - wait longer
                     wait_time = retry_config.calculate_delay(attempt) * 2  # Double wait for rate limits
                     logger.warning(f"Rate limit error on attempt {attempt}/{retry_config.max_attempts} for {description}: {e}")
-                    
+
+                    # Epic 4: Record 429 retry metric
+                    self.metrics.broker_429_retry(operation, success=False)
+
                     if attempt < retry_config.max_attempts:
                         logger.info(f"Waiting {wait_time:.1f}s before retry...")
                         await asyncio.sleep(wait_time)
                         continue
+                    else:
+                        # All retries failed
+                        self.metrics.broker_429_retry(operation, success=False)
                 
                 elif "5" in error_msg[:1]:  # 5xx server errors
                     # Server error - retry with exponential backoff
@@ -452,6 +507,71 @@ class EnhancedAlpacaExecutor:
                             }
                         )
                         return None
+
+                # Epic 4: Check if order already exists by client_order_id (idempotency)
+                try:
+                    existing_order = await self._execute_with_retry(
+                        operation="get_order_by_client_id",
+                        func=lambda: self.trading_client.get_order_by_client_order_id(
+                            order_intent.client_order_id
+                        ),
+                        description=f"Check existing order {order_intent.client_order_id}"
+                    )
+
+                    if existing_order:
+                        logger.warning(f"💡 Order already exists (idempotency): {order_intent.client_order_id} -> {existing_order.id}")
+
+                        # Record duplicate blocked metric
+                        self.metrics.duplicate_order_blocked(
+                            symbol=order_intent.symbol,
+                            client_order_id=order_intent.client_order_id
+                        )
+
+                        # Add to order tracker with existing broker ID
+                        self.order_tracker.add_pending_order(order_intent, existing_order.id)
+
+                        # If already filled, create OrderFill and return
+                        if existing_order.status in ['filled', 'partially_filled']:
+                            fill_price = Decimal(str(existing_order.filled_avg_price or existing_order.limit_price or 0))
+                            filled_qty = Decimal(str(existing_order.filled_qty or 0))
+
+                            if filled_qty > 0:
+                                order_fill = OrderFill(
+                                    symbol=order_intent.symbol,
+                                    timestamp=TimeUtils.utc_now(),
+                                    side=order_intent.side,
+                                    quantity=order_intent.quantity,
+                                    fill_price=fill_price,
+                                    fill_quantity=filled_qty,
+                                    broker_order_id=existing_order.id,
+                                    client_order_id=order_intent.client_order_id,
+                                    status=OrderStatus.FILLED if existing_order.status == 'filled' else OrderStatus.PARTIALLY_FILLED,
+                                    commission=Decimal('0.0'),
+                                    total_value=fill_price * filled_qty
+                                )
+
+                                # Update order tracker
+                                self.order_tracker.update_order_status(
+                                    existing_order.id,
+                                    existing_order.status,
+                                    filled_qty,
+                                    fill_price
+                                )
+
+                                logger.info(f"✅ Existing order already filled: {order_intent.client_order_id}")
+                                return order_fill
+
+                        # Order exists but not filled yet
+                        logger.info(f"Order exists in state: {existing_order.status}")
+                        return None
+
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if "not found" in error_str or "does not exist" in error_str:
+                        logger.debug(f"No existing order found for client_order_id: {order_intent.client_order_id} (proceeding with submit)")
+                    else:
+                        logger.warning(f"Error checking existing order: {e}")
+                        # Continue with submit anyway
 
                 # Convert order side
                 alpaca_side = self.convert_side(order_intent.side)
@@ -565,16 +685,48 @@ class EnhancedAlpacaExecutor:
                 return None
     
     async def monitor_pending_orders(self):
-        """Monitor pending orders for fills and status updates"""
-        logger.info("Starting enhanced order monitoring...")
-        
+        """Monitor pending orders for fills, status updates and timeouts (Epic 5)"""
+        logger.info("Starting enhanced order monitoring with FSM timeouts...")
+
         while self.running:
             try:
+                # Epic 5: Check for order timeouts FIRST
+                timed_out = await self.order_tracker.check_timeouts()
+
+                for broker_id in timed_out:
+                    # Attempt to cancel timed out order
+                    try:
+                        logger.warning(f"⏰ Canceling timed out order: {broker_id}")
+
+                        await self._execute_with_retry(
+                            operation="cancel_order",
+                            func=lambda: self.trading_client.cancel_order_by_id(broker_id),
+                            description=f"Cancel timed out order {broker_id}"
+                        )
+
+                        logger.info(f"✅ Successfully canceled timed out order: {broker_id}")
+
+                        # Publish timeout event to system stream
+                        fsm = self.order_tracker.order_fsms.get(broker_id)
+                        self.bus.publish_system_event(
+                            event_type="order_timeout",
+                            source="executor",
+                            data={
+                                "broker_order_id": broker_id,
+                                "reason": "timeout",
+                                "fsm_state": fsm.to_dict() if fsm else {}
+                            }
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to cancel timed out order {broker_id}: {e}")
+
+                # Monitor pending orders
                 pending_orders = self.order_tracker.get_pending_orders()
-                
+
                 if pending_orders:
                     logger.debug(f"Monitoring {len(pending_orders)} pending orders")
-                    
+
                     # Get orders from Alpaca with retry logic
                     try:
                         orders = await self._execute_with_retry(
@@ -582,17 +734,17 @@ class EnhancedAlpacaExecutor:
                             func=lambda: self.trading_client.get_orders(),
                             description="Get orders status"
                         )
-                        
+
                         for order in orders:
                             if order.id in pending_orders:
                                 await self._process_order_update(order)
-                                
+
                     except Exception as e:
                         logger.error(f"Error fetching order status: {e}")
                         await asyncio.sleep(10)  # Wait before retrying
-                
+
                 await asyncio.sleep(15)  # Check every 15 seconds
-                
+
             except Exception as e:
                 logger.error(f"Error in order monitoring loop: {e}")
                 await asyncio.sleep(30)  # Wait longer on error

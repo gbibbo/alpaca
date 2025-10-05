@@ -174,6 +174,25 @@ class OrderIntent(BaseModel):
             raise ValueError('Limit orders must have a price')
         return v
 
+    def generate_client_order_id(self, strategy_source: str = None) -> str:
+        """
+        Generate deterministic client_order_id for idempotency (Epic 4)
+        Format: risk_{source}_{symbol}_{timestamp}_{intent_id_prefix}
+
+        This ensures:
+        - Same signal/intent = same client_order_id
+        - Alpaca broker can deduplicate retries automatically
+        - Safe 429/5xx retry without creating duplicate orders
+        """
+        source = (strategy_source or self.signal_source).replace('_', '').lower()[:12]  # Max 12 chars
+        ts_part = self.timestamp.strftime("%Y%m%d%H%M%S") if self.timestamp else "000000000000"
+        intent_id_part = str(self.intent_id).replace('-', '')[:8]  # First 8 chars of UUID
+
+        # Format: risk_source_SYMBOL_timestamp_intentid (max 50 chars per validation)
+        client_id = f"risk_{source}_{self.symbol}_{ts_part}_{intent_id_part}"
+
+        return client_id[:50]  # Ensure max 50 chars
+
 class OrderFill(BaseModel):
     """Order execution result with enhanced tracking"""
     schema_version: SchemaVersion = SchemaVersion.V1

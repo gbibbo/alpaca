@@ -195,6 +195,21 @@ DUPLICATE_ORDERS_BLOCKED = Counter(
     registry=TRADING_REGISTRY
 )
 
+# Epic 4: Idempotency Metrics
+DUPLICATE_ORDER_BLOCKED_BY_CLIENT_ID = Counter(
+    'duplicate_order_blocked_by_client_id_total',
+    'Orders blocked due to duplicate client_order_id (Epic 4)',
+    ['symbol', 'client_order_id_prefix'],
+    registry=TRADING_REGISTRY
+)
+
+BROKER_429_RETRIES = Counter(
+    'broker_429_retries_total',
+    '429 rate limit retries with same client_order_id (Epic 4)',
+    ['operation', 'success'],
+    registry=TRADING_REGISTRY
+)
+
 # Portfolio & PnL Metrics
 PORTFOLIO_VALUE = Gauge(
     'trading_portfolio_value_usd',
@@ -475,6 +490,23 @@ class ExecutorMetrics(ServiceMetrics):
     def alpaca_retry(self, endpoint: str, attempt: int):
         """Record Alpaca retry"""
         ALPACA_RETRY_TOTAL.labels(endpoint=endpoint, attempt=str(attempt)).inc()
+
+    # Epic 4: Idempotency metrics
+    def duplicate_order_blocked(self, symbol: str, client_order_id: str):
+        """Record duplicate order blocked by client_order_id (Epic 4)"""
+        # Extract prefix for grouping (first 20 chars)
+        prefix = client_order_id[:20] if client_order_id else "unknown"
+        DUPLICATE_ORDER_BLOCKED_BY_CLIENT_ID.labels(
+            symbol=symbol,
+            client_order_id_prefix=prefix
+        ).inc()
+
+    def broker_429_retry(self, operation: str, success: bool):
+        """Record 429 retry with idempotent client_order_id (Epic 4)"""
+        BROKER_429_RETRIES.labels(
+            operation=operation,
+            success="true" if success else "false"
+        ).inc()
 
 class StrategyMetrics(ServiceMetrics):
     """Metrics helpers for Trading Strategies"""

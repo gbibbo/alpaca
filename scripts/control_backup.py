@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/control.py
+scripts/control_backup.py
 Complete Trading Platform Controller - Enhanced with ChatGPT fixes
 Implements robust process management, port-based cleanup, and strict health checking
 """

@@ -4,6 +4,8 @@ A comprehensive, microservices-based algorithmic trading platform built with Pyt
 
 ## 🆕 Latest Improvements
 
+- **🔒 Epic 4 - Idempotency**: Deterministic `client_order_id` generation for safe 429/5xx retries without duplicate orders
+- **🎯 Epic 5 - Order FSM**: Complete order lifecycle management with 13 states, automatic timeouts (30s NEW, 5min PARTIAL), and auto-cancellation
 - **✨ System Events Architecture**: Complete implementation of system-wide configuration events with Redis Streams consumer groups
 - **🎯 Reproducible Strategies**: Dynamic seed configuration for deterministic backtesting results
 - **🔄 Safe Message Processing**: ACK-safe pattern with automatic message recovery for Redis 6.0+ compatibility
@@ -13,7 +15,7 @@ A comprehensive, microservices-based algorithmic trading platform built with Pyt
 - **🔧 Crash Recovery Testing**: Automated pending message reclaim validation
 - **📊 PnL Aggregation**: Real-time portfolio tracking with CSV/JSON export capabilities
 
-## ✅ Epic 1 & 2 Implementation Status
+## ✅ Epic 1-5 Implementation Status
 
 **Epic 1 — Message Bus & Redis Streams:**
 - Verified with `scripts/qa/streams_low_level_check.py` (shows `PASS` with `pending=0`)
@@ -28,6 +30,26 @@ A comprehensive, microservices-based algorithmic trading platform built with Pyt
 - **Sidecar re-export** with **strict Content-Type** `text/plain; version=0.0.4; charset=utf-8`:
   - `risk_manager` (sidecar) → `http://127.0.0.1:9911/metrics`
   - `executor`     (sidecar) → `http://127.0.0.1:9912/metrics`
+
+**Epic 4 — Idempotency & 429/5xx Retry Handling:**
+- **Deterministic `client_order_id`**: Format `risk_{source}_{symbol}_{timestamp}_{intent_id}` (max 50 chars)
+- **Pre-submit duplicate detection**: Checks existing orders by `client_order_id` before submission
+- **Safe 429/5xx retries**: Uses same `client_order_id` across retry attempts to prevent duplicates
+- **Prometheus metrics**:
+  - `duplicate_order_blocked_by_client_id_total{symbol, client_order_id_prefix}` - Blocked duplicates
+  - `broker_429_retries_total{operation, success}` - Retry attempts and outcomes
+- **Validation**: Run `python scripts/validate_epic4_5_simple.py` (13/13 tests passing)
+
+**Epic 5 — Order Finite State Machine (FSM):**
+- **13 states**: NEW, SUBMITTED, PENDING_NEW, ACCEPTED, PARTIALLY_FILLED, PENDING_CANCEL, PENDING_REPLACE, FILLED, CANCELED, REJECTED, EXPIRED, REPLACED, SUSPENDED
+- **10 events**: SUBMIT, ACCEPT, PARTIAL_FILL, FILL, CANCEL, REPLACE, REJECT, EXPIRE, TIMEOUT, SUSPEND
+- **Automatic timeouts**: NEW state (30s), PARTIALLY_FILLED state (5min) - configurable
+- **Auto-cancellation**: Timed-out orders canceled automatically by executor monitor (every 15s)
+- **Fill tracking**: Tracks quantity filled, remaining, weighted average price, fill percentage
+- **Helper functions**: `is_terminal()`, `is_active()`, `can_cancel()`, `get_fill_percentage()`
+- **Alpaca integration**: Automatic status mapping from Alpaca API to FSM events
+- **System events**: Timeout events published to `system` stream with full FSM state
+- **Validation**: Run `python scripts/validate_epic4_5_simple.py` (13/13 tests passing)
 
 ## 🏗️ Architecture
 
