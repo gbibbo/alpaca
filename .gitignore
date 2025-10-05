@@ -5,6 +5,14 @@
 config.json
 secrets.json
 
+# Ignorar instaladores grandes
+Miniconda*.sh
+*.sh  # Si quieres ignorar todos los .sh, pero cuidado si tienes scripts útiles
+
+# Ignorar temporales o grandes en general
+.tmp-*
+*.tmp
+
 # Python
 __pycache__/
 *.py[cod]
