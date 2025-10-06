@@ -30,6 +30,9 @@ from lib.metrics_helpers import (
     Counter, TRADING_REGISTRY
 )
 
+# Import persistence
+from apps.simulator.persist import BacktestPersistence
+
 # Simulator-specific metrics
 BARS_PUBLISHED = Counter(
     'trading_simulator_bars_published_total',
@@ -218,11 +221,18 @@ class HistoricalSimulator:
     Replays historical data through the message bus at configurable speed
     """
     
-    def __init__(self, speed_multiplier: float = 1.0):
+    def __init__(self, speed_multiplier: float = 1.0, enable_persistence: bool = False, run_id: Optional[str] = None):
         self.speed_multiplier = speed_multiplier
         self.data_loader = AlpacaDataLoader()
         self.bus = None
         self.running = False
+        self.enable_persistence = enable_persistence
+        self.persistence = None
+
+        # Initialize persistence if enabled
+        if enable_persistence:
+            self.persistence = BacktestPersistence(run_id=run_id)
+            logger.info(f"Persistence enabled: {self.persistence.run_dir}")
 
         # Initialize metrics
         self.metrics = ServiceMetrics('simulator')
@@ -321,6 +331,19 @@ class HistoricalSimulator:
             self.bus.publish_bar(bar)
             bars_published += 1
 
+            # Persist bar if enabled
+            if self.persistence:
+                self.persistence.save_bar({
+                    "symbol": bar.symbol,
+                    "timestamp": bar.timestamp.isoformat(),
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": bar.volume,
+                    "timeframe": bar.timeframe.value if hasattr(bar.timeframe, 'value') else str(bar.timeframe)
+                })
+
             # Record metrics
             BARS_PUBLISHED.labels(symbol=bar.symbol).inc()
             SIM_TICKS_TOTAL.inc()
@@ -375,26 +398,61 @@ class HistoricalSimulator:
             )
         }
     
-    async def run_simulation(self, symbol_data: Dict[str, List[Bar]], 
-                           real_time_delay: bool = True) -> Dict:
+    async def run_simulation(self, symbol_data: Dict[str, List[Bar]],
+                           real_time_delay: bool = True,
+                           simulation_params: Optional[Dict] = None) -> Dict:
         """
         Run complete historical simulation
         """
         self.running = True
         self.stats['start_time'] = TimeUtils.utc_now()
-        
+
         logger.info(f"Starting historical simulation for {len(symbol_data)} symbols")
         logger.info(f"Speed multiplier: {self.speed_multiplier}x")
         logger.info(f"Real-time delays: {'enabled' if real_time_delay else 'disabled'}")
-        
+        logger.info(f"Persistence: {'enabled' if self.persistence else 'disabled'}")
+
+        # Save simulation parameters if persistence enabled
+        if self.persistence and simulation_params:
+            self.persistence.save_metadata("simulation_params", simulation_params)
+            self.persistence.save_metadata("start_time", self.stats['start_time'].isoformat())
+
         try:
             # Run simulation
             results = await self.simulate_multiple_symbols(symbol_data, real_time_delay)
-            
+
             # Update stats
             self.stats['bars_published'] = sum(results.values())
             self.stats['end_time'] = TimeUtils.utc_now()
-            
+
+            # Save final stats and generate summary if persistence enabled
+            if self.persistence:
+                self.persistence.save_metadata("end_time", self.stats['end_time'].isoformat())
+                self.persistence.save_metadata("results", results)
+
+                summary = self.persistence.save_summary()
+
+                # Export to CSV
+                try:
+                    self.persistence.export_to_csv()
+                    logger.info(f"Results exported to CSV: {self.persistence.run_dir / 'data'}")
+                except Exception as e:
+                    logger.warning(f"CSV export failed: {e}")
+
+                # Try to export to Parquet
+                try:
+                    self.persistence.export_to_parquet()
+                    logger.info(f"Results exported to Parquet: {self.persistence.run_dir / 'data'}")
+                except Exception as e:
+                    logger.debug(f"Parquet export skipped: {e}")
+
+                # Compute reproducibility hash
+                results_hash = self.persistence.compute_hash()
+                logger.info(f"Results hash (for reproducibility): {results_hash}")
+
+                logger.info(f"📁 Backtest results saved to: {self.persistence.run_dir}")
+                logger.info(f"📊 Summary: {summary}")
+
             # Publish completion event
             self.bus.publish_system_event(
                 event_type="simulation_completed",
@@ -403,19 +461,25 @@ class HistoricalSimulator:
                     "results": results,
                     "total_bars": self.stats['bars_published'],
                     "symbols": list(results.keys()),
-                    "duration_seconds": self.get_stats()['duration_seconds']
+                    "duration_seconds": self.get_stats()['duration_seconds'],
+                    "persistence_enabled": self.persistence is not None,
+                    "run_id": self.persistence.run_id if self.persistence else None
                 }
             )
-            
+
             logger.info(f"Simulation completed: {self.stats['bars_published']} total bars")
             return results
-            
+
         except Exception as e:
             logger.error(f"Simulation error: {e}")
             self.stats['end_time'] = TimeUtils.utc_now()
             return {}
         finally:
             self.running = False
+
+            # Close persistence
+            if self.persistence:
+                self.persistence.close()
 
 async def main():
     """Main entry point for historical simulator"""
@@ -430,6 +494,8 @@ async def main():
     parser.add_argument("--csv", help="Load data from CSV files directory instead of Alpaca")
     parser.add_argument("--output", help="Save simulation results to JSON file")
     parser.add_argument("--seed", type=int, help="Random seed for reproducible strategy results")
+    parser.add_argument("--persist", action="store_true", help="Enable persistence (save to SQLite/CSV/Parquet)")
+    parser.add_argument("--run-id", help="Custom run ID for persistence (default: auto-generated)")
     
     args = parser.parse_args()
     
@@ -437,9 +503,13 @@ async def main():
         # Parse symbols
         symbols = [s.strip().upper() for s in args.symbols.split(",")]
         logger.info(f"Simulating symbols: {symbols}")
-        
-        # Initialize simulator
-        simulator = HistoricalSimulator(speed_multiplier=args.speed)
+
+        # Initialize simulator with persistence if requested
+        simulator = HistoricalSimulator(
+            speed_multiplier=args.speed,
+            enable_persistence=args.persist,
+            run_id=args.run_id
+        )
         
         if not simulator.connect():
             logger.error("Failed to connect to message bus")
@@ -478,10 +548,24 @@ async def main():
             logger.error("No data loaded for any symbol")
             return 1
         
+        # Prepare simulation parameters
+        simulation_params = {
+            "symbols": symbols,
+            "start": args.start,
+            "end": args.end,
+            "timeframe": args.timeframe,
+            "feed": args.feed,
+            "speed_multiplier": args.speed,
+            "real_time_delays": not args.no_delays,
+            "seed": args.seed,
+            "data_source": "csv" if args.csv else "alpaca"
+        }
+
         # Run simulation
         results = await simulator.run_simulation(
-            symbol_data, 
-            real_time_delay=not args.no_delays
+            symbol_data,
+            real_time_delay=not args.no_delays,
+            simulation_params=simulation_params
         )
         
         # Show results
@@ -496,7 +580,14 @@ async def main():
         print(f"\nTotal bars: {stats['bars_published']:,}")
         print(f"Duration: {stats['duration_seconds']:.1f}s")
         print(f"Speed: {args.speed}x")
-        
+
+        # Show persistence info
+        if args.persist and simulator.persistence:
+            print(f"\n📁 Persistence enabled:")
+            print(f"   Run ID: {simulator.persistence.run_id}")
+            print(f"   Output: {simulator.persistence.run_dir}")
+            print(f"   Database: {simulator.persistence.db_path}")
+
         # Save results if requested
         if args.output:
             import json

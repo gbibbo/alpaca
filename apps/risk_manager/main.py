@@ -37,52 +37,15 @@ from lib.metrics_helpers import (
     start_metrics_server, find_available_port
 )
 
+# Import enhanced market hours validator
+from apps.risk_manager.market_hours import MarketHoursValidator
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-class MarketHoursValidator:
-    """Validates market hours using timezone-aware logic"""
-    
-    def __init__(self):
-        self.settings = get_settings()
-        # Cache for market schedule (future: integrate with Alpaca Clock API)
-        self._market_holidays = set()  # TODO: Implement holiday calendar
-        
-    def is_market_open(self, dt: Optional[datetime] = None) -> bool:
-        """Check if market is open at given time (or now)"""
-        return TimeUtils.is_market_hours(dt)
-    
-    def time_until_market_open(self) -> timedelta:
-        """Get time until next market open"""
-        now = TimeUtils.market_now()
-        next_open = TimeUtils.next_market_open(now)
-        return next_open - now
-    
-    def validate_trading_hours(self) -> Tuple[bool, str]:
-        """Validate current trading hours with detailed reason"""
-        now = TimeUtils.market_now()
-        
-        # Check if it's a weekend
-        if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
-            return False, f"Market closed - Weekend ({now.strftime('%A')})"
-        
-        # Check market hours (9:30 AM - 4:00 PM ET)
-        if not TimeUtils.is_market_hours(now):
-            if now.hour < 9 or (now.hour == 9 and now.minute < 30):
-                time_until_open = self.time_until_market_open()
-                return False, f"Market closed - Pre-market (opens in {time_until_open})"
-            else:
-                return False, f"Market closed - After-hours (opens {TimeUtils.next_market_open()})"
-        
-        # TODO: Add holiday checking
-        # if now.date() in self._market_holidays:
-        #     return False, f"Market closed - Holiday"
-        
-        return True, "Market open"
 
 
 class CircuitBreaker:
@@ -192,7 +155,23 @@ class EnhancedRiskManager:
 
         # Initialize enhanced services
         self.deduplication = get_deduplication_service()
-        self.market_validator = MarketHoursValidator()
+
+        # Initialize market hours validator with optional Alpaca Clock API
+        # Try to get Alpaca trading client if available
+        alpaca_client = None
+        if self.settings.has_alpaca_credentials:
+            try:
+                from alpaca.trading.client import TradingClient
+                alpaca_client = TradingClient(
+                    api_key=self.settings.apca_api_key_id,
+                    secret_key=self.settings.apca_api_secret_key,
+                    paper=self.settings.is_paper_trading
+                )
+                logger.info("Connected to Alpaca Clock API for market hours validation")
+            except Exception as e:
+                logger.warning(f"Could not initialize Alpaca Clock API: {e}")
+
+        self.market_validator = MarketHoursValidator(alpaca_client)
 
         # Initialize metrics
         self.metrics = RiskManagerMetrics()
