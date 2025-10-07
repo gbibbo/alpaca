@@ -573,6 +573,7 @@ def main():
     parser.add_argument("--plot", help="Save plot to file (e.g., results.png)")
     parser.add_argument("--no-plot", action="store_true", help="Skip plotting")
     parser.add_argument("--output", help="Save results to JSON file")
+    parser.add_argument("--persist", action="store_true", help="Enable persistence (save to database)")
     
     args = parser.parse_args()
     

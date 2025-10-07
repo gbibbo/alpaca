@@ -5,7 +5,15 @@ tests/test_fixed_bus.py - SMART VERSION (CORREGIDO)
 - Hace SKIP de pruebas que requieren Streams si sólo hay FakeRedis.
 - Arregla el conteo de SKIPPED/FAILED/PASSED.
 - Pub/Sub: se suscribe antes de publicar para evitar race conditions.
+
+NOTE: This file is NOT a pytest test file. It's a standalone script with custom test orchestration.
+Run it directly: python tests/test_fixed_bus.py
+DO NOT run with pytest - the test functions require TestResults parameter that pytest can't provide.
 """
+
+# Tell pytest to skip this entire file
+import pytest
+pytest.skip("This is a standalone script, not a pytest test file. Run directly: python tests/test_fixed_bus.py", allow_module_level=True)
 
 import os
 import sys

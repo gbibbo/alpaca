@@ -1,0 +1,24 @@
+{
+  "simulation_stats": {
+    "bars_published": 5,
+    "start_time": "2025-09-28 18:33:03.820288+00:00",
+    "end_time": "2025-09-28 18:33:03.821257+00:00",
+    "symbols_processed": [
+      "AAPL"
+    ],
+    "duration_seconds": 0.000969
+  },
+  "results": {
+    "AAPL": 5
+  },
+  "parameters": {
+    "symbols": [
+      "AAPL"
+    ],
+    "start": "2025-09-21",
+    "end": "2025-09-28",
+    "timeframe": "1Day",
+    "feed": "iex",
+    "speed_multiplier": 1.0
+  }
+}

@@ -1,7 +1,7 @@
 # Makefile para Trading Platform
 # Implementa targets de ChatGPT para facilitar operaciones comunes
 
-.PHONY: help install test clean backtest-googl run-risk run-executor run-all stop-all
+.PHONY: help install test test-quick test-regression test-epic6 test-epic7 test-epic9 test-epic3 test-edge-cases test-load test-auth test-websocket clean backtest-googl backtest-persist backtest-custom run-risk run-executor run-all stop-all
 
 # Configuración por defecto
 PYTHON = python
@@ -18,11 +18,22 @@ help:
 	@echo ""
 	@echo "🔧 Setup & Development:"
 	@echo "  install          Install dependencies"
-	@echo "  test            Run test suite"
+	@echo "  test            Run full test suite"
+	@echo "  test-quick       Run quick validation tests (9 tests, ~10s)"
+	@echo "  test-regression  Run regression tests (Epic 6 & 7)"
+	@echo "  test-epic6       Test Epic 6 (Market Hours)"
+	@echo "  test-epic7       Test Epic 7 (Persistence)"
+	@echo "  test-epic9       Test Epic 9 (Edge Cases & Load)"
+	@echo "  test-epic3       Test Epic 3 (Auth & WebSocket)"
+	@echo "  test-edge-cases  Test edge cases only"
+	@echo "  test-load        Test load/performance only"
+	@echo "  test-auth        Test authentication only"
+	@echo "  test-websocket   Test WebSocket only"
 	@echo "  clean           Clean temporary files"
 	@echo ""
 	@echo "📈 Backtesting:"
 	@echo "  backtest-googl   Run GOOGL backtest with default settings"
+	@echo "  backtest-persist Run GOOGL backtest with persistence (Epic 7)"
 	@echo "  backtest-custom  Run custom backtest (requires SYMBOL, START_DATE)"
 	@echo ""
 	@echo "🚀 Services:"
@@ -52,6 +63,60 @@ test:
 	@echo "🧪 Running tests..."
 	$(PYTHON) -m pytest tests/ -v
 	@echo "✅ Tests completed"
+
+test-quick:
+	@echo "⚡ Running quick validation tests..."
+	@bash quick_test.sh
+	@echo "✅ Quick tests completed"
+
+test-regression:
+	@echo "🔄 Running regression tests..."
+	@bash scripts/test_regression_epic6_7.sh
+	@$(PYTHON) scripts/test_system_health.py
+	@$(PYTHON) scripts/validate_epic6_7.py
+	@echo "✅ Regression tests completed"
+
+test-epic6:
+	@echo "📅 Testing Epic 6 (Market Hours)..."
+	@$(PYTHON) -m pytest tests/test_epic6_market_hours.py -v
+	@echo "✅ Epic 6 tests completed"
+
+test-epic7:
+	@echo "💾 Testing Epic 7 (Persistence)..."
+	@$(PYTHON) -m pytest tests/test_epic7_persistence.py -v
+	@echo "✅ Epic 7 tests completed"
+
+test-epic9:
+	@echo "🔥 Testing Epic 9 (Edge Cases & Load)..."
+	@$(PYTHON) -m pytest tests/test_edge_cases.py -v
+	@$(PYTHON) -m pytest tests/test_load_performance.py -v -m slow
+	@echo "✅ Epic 9 tests completed"
+
+test-edge-cases:
+	@echo "⚠️  Testing edge cases..."
+	@$(PYTHON) -m pytest tests/test_edge_cases.py -v
+	@echo "✅ Edge case tests completed"
+
+test-load:
+	@echo "📊 Running load/performance tests..."
+	@$(PYTHON) -m pytest tests/test_load_performance.py -v -m slow
+	@echo "✅ Load tests completed"
+
+test-epic3:
+	@echo "🔐 Testing Epic 3 (Auth & WebSocket)..."
+	@$(PYTHON) -m pytest tests/test_epic3_auth.py -v
+	@$(PYTHON) -m pytest tests/test_epic3_websocket.py -v
+	@echo "✅ Epic 3 tests completed"
+
+test-auth:
+	@echo "🔑 Testing authentication..."
+	@$(PYTHON) -m pytest tests/test_epic3_auth.py -v
+	@echo "✅ Auth tests completed"
+
+test-websocket:
+	@echo "📡 Testing WebSocket..."
+	@$(PYTHON) -m pytest tests/test_epic3_websocket.py -v
+	@echo "✅ WebSocket tests completed"
 
 clean:
 	@echo "🧹 Cleaning temporary files..."
@@ -88,6 +153,20 @@ backtest-custom:
 		--slippage-bps $(SLIPPAGE_BPS) \
 		--plot out/$(SYMBOL).png \
 		--output out/$(SYMBOL).json
+
+backtest-persist:
+	@echo "💾 Running GOOGL backtest with persistence..."
+	@mkdir -p out
+	$(PYTHON) scripts/sim_random.py \
+		--symbol GOOGL \
+		--start 2021-01-01 \
+		--initial-cash $(INITIAL_CASH) \
+		--position-notional $(POSITION_NOTIONAL) \
+		--slippage-bps $(SLIPPAGE_BPS) \
+		--persist \
+		--plot out/GOOGL_persist.png
+	@echo "✅ Backtest with persistence completed"
+	@echo "📁 Results saved to out/run_*/"
 
 # Service management
 run-risk:

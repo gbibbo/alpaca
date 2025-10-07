@@ -1,0 +1,417 @@
+name: Nightly Tests
+
+on:
+  schedule:
+    # Run every night at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PYTHON_VERSION: "3.11"
+  REDIS_VERSION: "7"
+
+jobs:
+  test-matrix:
+    name: Test Matrix (Python ${{ matrix.python-version }}, Redis ${{ matrix.redis-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+        redis-version: ["6.0", "6.2", "7.0"]
+
+    services:
+      redis:
+        image: redis:${{ matrix.redis-version }}-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov pytest-timeout
+        pip install -r requirements.txt
+
+    - name: Check Redis version
+      run: |
+        redis-cli -h localhost INFO server | grep redis_version
+
+    - name: Run all tests
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+        USE_FAKE_REDIS: 0
+      run: |
+        pytest tests/ -v --timeout=300 --cov=apps --cov=lib
+
+    - name: Run Epic 6 tests
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+      run: |
+        pytest tests/test_epic6_market_hours.py -v --timeout=60
+
+    - name: Run Epic 7 tests
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+      run: |
+        pytest tests/test_epic7_persistence.py -v --timeout=60
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        flags: nightly-${{ matrix.python-version }}-redis${{ matrix.redis-version }}
+        name: nightly-${{ matrix.python-version }}-redis${{ matrix.redis-version }}
+      continue-on-error: true
+
+  stress-test:
+    name: Stress Tests
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:${{ env.REDIS_VERSION }}-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-timeout locust
+        pip install -r requirements.txt
+
+    - name: Run stress tests
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+        USE_FAKE_REDIS: 0
+      run: |
+        # Placeholder for stress tests
+        echo "Running stress tests..."
+        # pytest tests/stress/ -v --timeout=600
+      timeout-minutes: 15
+      continue-on-error: true
+
+  long-running-backtest:
+    name: Long-Running Backtest
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:${{ env.REDIS_VERSION }}-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run multi-year backtest
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+      run: |
+        mkdir -p out
+        python scripts/sim_random.py \
+          --symbol GOOGL \
+          --start 2020-01-01 \
+          --initial-cash 100000 \
+          --position-notional 10000 \
+          --slippage-bps 3 \
+          --seed 42 \
+          --plot out/nightly_backtest.png \
+          --output out/nightly_backtest.json
+      timeout-minutes: 30
+
+    - name: Upload backtest results
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-backtest-results
+        path: |
+          out/nightly_backtest.png
+          out/nightly_backtest.json
+
+  persistence-verification:
+    name: Persistence Verification
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:${{ env.REDIS_VERSION }}-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run backtest with persistence (Run 1)
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+      run: |
+        mkdir -p out
+        python scripts/sim_random.py \
+          --symbol AAPL \
+          --start 2023-01-01 \
+          --end 2023-12-31 \
+          --initial-cash 100000 \
+          --position-notional 10000 \
+          --seed 12345 \
+          --persist \
+          --run-id nightly_run1
+      timeout-minutes: 15
+
+    - name: Run backtest with persistence (Run 2 - same seed)
+      env:
+        REDIS_URL: redis://localhost:6379/15
+        BUS_BACKEND: streams
+      run: |
+        python scripts/sim_random.py \
+          --symbol AAPL \
+          --start 2023-01-01 \
+          --end 2023-12-31 \
+          --initial-cash 100000 \
+          --position-notional 10000 \
+          --seed 12345 \
+          --persist \
+          --run-id nightly_run2
+      timeout-minutes: 15
+
+    - name: Verify reproducibility
+      run: |
+        # Compare hashes from both runs
+        HASH1=$(python -c "
+        import json
+        with open('out/nightly_run1/summary.json') as f:
+            print(json.load(f).get('fills_hash', 'MISSING'))
+        ")
+        HASH2=$(python -c "
+        import json
+        with open('out/nightly_run2/summary.json') as f:
+            print(json.load(f).get('fills_hash', 'MISSING'))
+        ")
+
+        echo "Run 1 Hash: $HASH1"
+        echo "Run 2 Hash: $HASH2"
+
+        if [ "$HASH1" != "$HASH2" ]; then
+          echo "❌ Reproducibility verification failed!"
+          exit 1
+        else
+          echo "✅ Reproducibility verified! Hashes match."
+        fi
+
+    - name: Upload persistence artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: persistence-verification
+        path: |
+          out/nightly_run1/
+          out/nightly_run2/
+
+  market-hours-validation:
+    name: Market Hours Validation
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:${{ env.REDIS_VERSION }}-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest
+        pip install -r requirements.txt
+
+    - name: Validate all 2024 holidays
+      run: |
+        python -c "
+        from apps.risk_manager.market_hours import MarketCalendar
+        from datetime import datetime
+
+        cal = MarketCalendar()
+        holidays_2024 = [d for d in cal.MARKET_HOLIDAYS.keys() if d.startswith('2024')]
+
+        print(f'Validating {len(holidays_2024)} holidays in 2024...')
+        for date_str in holidays_2024:
+            date = datetime.strptime(date_str, '%Y-%m-%d')
+            is_holiday, reason = cal.is_holiday(date)
+            assert is_holiday, f'{date_str} should be a holiday'
+            print(f'✅ {date_str}: {reason}')
+
+        print(f'\n✅ All {len(holidays_2024)} holidays validated!')
+        "
+
+    - name: Validate early close days
+      run: |
+        python -c "
+        from apps.risk_manager.market_hours import MarketCalendar
+        from datetime import datetime, time
+
+        cal = MarketCalendar()
+        early_close_2024 = [d for d in cal.EARLY_CLOSE_DAYS.keys() if d.startswith('2024')]
+
+        print(f'Validating {len(early_close_2024)} early close days in 2024...')
+        for date_str in early_close_2024:
+            date = datetime.strptime(date_str, '%Y-%m-%d')
+            is_early, reason = cal.is_early_close(date)
+            assert is_early, f'{date_str} should be an early close day'
+
+            market_open, market_close = cal.get_market_hours(date)
+            assert market_close == time(13, 0), f'{date_str} should close at 1:00 PM'
+            print(f'✅ {date_str}: {reason} (closes at {market_close})')
+
+        print(f'\n✅ All {len(early_close_2024)} early close days validated!')
+        "
+
+  dependency-audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install safety pip-audit
+        pip install -r requirements.txt
+
+    - name: Run safety check
+      run: |
+        safety check --json --output safety-report.json
+      continue-on-error: true
+
+    - name: Run pip-audit
+      run: |
+        pip-audit --format json --output pip-audit-report.json
+      continue-on-error: true
+
+    - name: Upload security reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-audit-reports
+        path: |
+          safety-report.json
+          pip-audit-report.json
+
+  report-summary:
+    name: Nightly Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-matrix, stress-test, long-running-backtest, persistence-verification, market-hours-validation, dependency-audit]
+    if: always()
+
+    steps:
+    - name: Generate summary
+      run: |
+        echo "# Nightly Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Date: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "- Test Matrix: ${{ needs.test-matrix.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Stress Tests: ${{ needs.stress-test.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Long-Running Backtest: ${{ needs.long-running-backtest.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Persistence Verification: ${{ needs.persistence-verification.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Market Hours Validation: ${{ needs.market-hours-validation.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Dependency Audit: ${{ needs.dependency-audit.result }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify on failure
+      if: |
+        needs.test-matrix.result == 'failure' ||
+        needs.persistence-verification.result == 'failure' ||
+        needs.market-hours-validation.result == 'failure'
+      run: |
+        echo "❌ Critical nightly tests failed!"
+        exit 1

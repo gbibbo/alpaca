@@ -5,14 +5,6 @@
 config.json
 secrets.json
 
-# Ignorar instaladores grandes
-Miniconda*.sh
-*.sh  # Si quieres ignorar todos los .sh, pero cuidado si tienes scripts útiles
-
-# Ignorar temporales o grandes en general
-.tmp-*
-*.tmp
-
 # Python
 __pycache__/
 *.py[cod]
@@ -44,26 +36,16 @@ ENV/
 env.bak/
 venv.bak/
 
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
 # Jupyter Notebooks
 .ipynb_checkpoints
-
-# PyCharm
-.idea/
-
-# VS Code
-.vscode/
-
-# Logs y datos temporales
-*.log
-*.tmp
-*.temp
-logs/
-temp/
-data/
-*.csv
-*.json
-*.xlsx
-*.pkl
+*.ipynb
 
 # Archivos de sistema
 .DS_Store
@@ -74,30 +56,109 @@ data/
 ehthumbs.db
 Thumbs.db
 
-# Archivos de trading específicos
-backtest_results/
-trading_logs/
-portfolio_data/
+# Logs (mantener estructura de directorios, ignorar contenido)
+logs/*.log
+logs/*.out
+logs/*.err
+*.log
+
+# Archivos temporales
+*.tmp
+*.temp
+.tmp-*
+temp/
+
+# PIDs y locks
+*.pid
+pids/*.pid
+
+# Resultados y outputs (mantener ejemplos, ignorar resultados de tests)
+out/run_*/
+out/*.png
+out/*.json
+out/*.csv
+out/*.db
+out/*.sqlite
+
+# Test results y coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+test_results_*.log
+test_fixed_results_*.log
+test_all_results_*.log
+test_summary_*.txt
+test_fixed_summary_*.txt
+*.coverage
+
+# Databases (SQLite)
 *.db
 *.sqlite
+*.sqlite3
+
+# Data files (mantener estructura, ignorar datos)
+data/csv/*.csv
+data/json/*.json
+data/*.xlsx
+data/*.pkl
+data/*.parquet
+
+# Redis
+redis-data/
+*.rdb
+dump.rdb
+
+# Prometheus & Grafana
+prometheus-*.linux-amd64/
+prometheus-*.darwin-amd64/
+prometheus-*.windows-amd64/
+prometheus-data/
+grafana-data/
+
+# Archivos de respaldo
+*.backup
+*.bak
+*~
+
+# Archivos compilados
+*.pyc
+*.pyo
 
 # Archivos temporales de pip
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Archivos grandes y binarios
-*.tar.gz
-prometheus-*.linux-amd64/
+# Instaladores grandes
+Miniconda*.sh
+Miniconda*.exe
 
-# Archivos PID (temporales de procesos)
-*.pid
+# Archivos de Windows
+*.exe
+*.dll
 
-# Datos y logs de Redis
-redis-data/
-*.rdb
+# ========================================
+# ARCHIVOS TEMPORALES ESPECÍFICOS DEL PROYECTO
+# ========================================
 
-# Archivos de respaldo
-*.backup.*
+# Scripts de test temporales (ignorar estos específicos)
+run_all_tests.bat
+run_all_tests.sh
+verify_final_fix.sh
+test_my_fixes.sh
+test_all_comprehensive.sh
+test_all_errors_fixed.sh
+cleanup_temp_files.sh
 
-# Plantillas no esenciales
-apps/api/templates/
+# Documentación temporal de Epics (mantener solo DEVELOPMENT_HISTORY.md)
+EPIC3_COMPLETE.md
+EPIC9_COMPLETE.md
+EPIC10_COMPLETE.md
+IMPLEMENTATION_SUMMARY.md
+
+# Resultados de tests específicos (ya cubierto arriba pero siendo explícito)
+test_fixed_summary_*.txt
+test_summary_*.txt
+test_fixed_results_*.log
+test_all_results_*.log

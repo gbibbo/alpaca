@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 
 # API base URL
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8001"
 
 def test_api_health():
     """Test basic API health"""
@@ -186,7 +186,7 @@ def main():
 
     # Basic health check
     if not test_api_health():
-        print("❌ API is not available. Make sure the API service is running on port 8000.")
+        print("❌ API is not available. Make sure the API service is running on port 8001.")
         return
 
     # Test creating and managing jobs

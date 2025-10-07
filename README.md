@@ -1,55 +1,34 @@
 # Algorithmic Trading Platform
 
-A comprehensive, microservices-based algorithmic trading platform built with Python, featuring real-time market data ingestion, historical data simulation, intelligent trading strategies, robust risk management, rapid backtesting capabilities, and enterprise-grade monitoring and observability.
+A production-ready, microservices-based algorithmic trading platform built with Python. Features real-time market data processing, intelligent trading strategies, comprehensive risk management, backtesting capabilities, and enterprise-grade monitoring.
 
-## 🆕 Latest Improvements
+> **Note**: For development history and implementation milestones, see [DEVELOPMENT_HISTORY.md](DEVELOPMENT_HISTORY.md)
 
-- **🔒 Epic 4 - Idempotency**: Deterministic `client_order_id` generation for safe 429/5xx retries without duplicate orders
-- **🎯 Epic 5 - Order FSM**: Complete order lifecycle management with 13 states, automatic timeouts (30s NEW, 5min PARTIAL), and auto-cancellation
-- **✨ System Events Architecture**: Complete implementation of system-wide configuration events with Redis Streams consumer groups
-- **🎯 Reproducible Strategies**: Dynamic seed configuration for deterministic backtesting results
-- **🔄 Safe Message Processing**: ACK-safe pattern with automatic message recovery for Redis 6.0+ compatibility
-- **⏱️ Python 3.10 Compatibility**: Robust ISO-8601 timestamp parsing with 'Z' suffix support
-- **🚀 Backtest API**: REST endpoints for job control, monitoring, and result management
-- **📈 Enhanced Metrics**: Dedicated Prometheus metrics servers with automatic port fallback (8011-8016)
-- **🔧 Crash Recovery Testing**: Automated pending message reclaim validation
-- **📊 PnL Aggregation**: Real-time portfolio tracking with CSV/JSON export capabilities
+## 🎯 Key Features
 
-## ✅ Epic 1-5 Implementation Status
+### 📊 Market Data & Trading
+- **Real-time Data**: Live market data from Alpaca Markets (IEX and SIP feeds)
+- **Historical Simulation**: Replay historical data through the complete trading pipeline
+- **Multiple Strategies**: Random and technical analysis-based trading strategies
+- **Risk Management**: Multi-layer validation with position limits, confidence thresholds, and circuit breakers
+- **Order Execution**: Direct Alpaca integration with comprehensive order lifecycle management
+- **Market Hours**: NYSE/NASDAQ calendar with holiday and early-close detection
 
-**Epic 1 — Message Bus & Redis Streams:**
-- Verified with `scripts/qa/streams_low_level_check.py` (shows `PASS` with `pending=0`)
-- Safe consumption with *consumer groups* and ACK after processing (see "QA / Testing" section)
-- Automatic message recovery with `XAUTOCLAIM` (Redis 6.2+) or manual reclaim (Redis 6.0-6.1)
+### 🔄 Reliability & Performance
+- **Message Bus**: Redis Streams with consumer groups for guaranteed delivery
+- **Idempotency**: Deterministic order IDs prevent duplicates during retries
+- **State Machine**: 13-state order FSM with automatic timeouts and cancellations
+- **Persistence**: SQLite/CSV/Parquet export with SHA256 verification
+- **Auto-recovery**: Automatic message reclaim and pending message handling
 
-**Epic 2 — Observability & Prometheus Metrics:**
-- Unified metrics in `lib/metrics_helpers.py` with global `CollectorRegistry` (`TRADING_REGISTRY`)
-- **Origin endpoints** exposed by services:
-  - `risk_manager` → `http://127.0.0.1:8011/metrics`
-  - `executor`     → `http://127.0.0.1:8012/metrics`
-- **Sidecar re-export** with **strict Content-Type** `text/plain; version=0.0.4; charset=utf-8`:
-  - `risk_manager` (sidecar) → `http://127.0.0.1:9911/metrics`
-  - `executor`     (sidecar) → `http://127.0.0.1:9912/metrics`
+### 📈 Monitoring & Analysis
+- **Prometheus Metrics**: Comprehensive business and system metrics
+- **Grafana Dashboards**: Real-time visualization and alerting
+- **WebSocket Dashboard**: Live trading dashboard with real-time updates
+- **Backtesting API**: REST endpoints for job-based backtest management
+- **Performance Reports**: Detailed analytics with Sharpe ratio, drawdown, win rates
 
-**Epic 4 — Idempotency & 429/5xx Retry Handling:**
-- **Deterministic `client_order_id`**: Format `risk_{source}_{symbol}_{timestamp}_{intent_id}` (max 50 chars)
-- **Pre-submit duplicate detection**: Checks existing orders by `client_order_id` before submission
-- **Safe 429/5xx retries**: Uses same `client_order_id` across retry attempts to prevent duplicates
-- **Prometheus metrics**:
-  - `duplicate_order_blocked_by_client_id_total{symbol, client_order_id_prefix}` - Blocked duplicates
-  - `broker_429_retries_total{operation, success}` - Retry attempts and outcomes
-- **Validation**: Run `python scripts/validate_epic4_5_simple.py` (13/13 tests passing)
-
-**Epic 5 — Order Finite State Machine (FSM):**
-- **13 states**: NEW, SUBMITTED, PENDING_NEW, ACCEPTED, PARTIALLY_FILLED, PENDING_CANCEL, PENDING_REPLACE, FILLED, CANCELED, REJECTED, EXPIRED, REPLACED, SUSPENDED
-- **10 events**: SUBMIT, ACCEPT, PARTIAL_FILL, FILL, CANCEL, REPLACE, REJECT, EXPIRE, TIMEOUT, SUSPEND
-- **Automatic timeouts**: NEW state (30s), PARTIALLY_FILLED state (5min) - configurable
-- **Auto-cancellation**: Timed-out orders canceled automatically by executor monitor (every 15s)
-- **Fill tracking**: Tracks quantity filled, remaining, weighted average price, fill percentage
-- **Helper functions**: `is_terminal()`, `is_active()`, `can_cancel()`, `get_fill_percentage()`
-- **Alpaca integration**: Automatic status mapping from Alpaca API to FSM events
-- **System events**: Timeout events published to `system` stream with full FSM state
-- **Validation**: Run `python scripts/validate_epic4_5_simple.py` (13/13 tests passing)
+---
 
 ## 🏗️ Architecture
 
@@ -64,7 +43,7 @@ A comprehensive, microservices-based algorithmic trading platform built with Pyt
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │     API         │    │  Risk Manager   │    │   Data Ingestor │
 │  (Monitoring)   │◄───┤  (Validation)   │◄───┤   (Alpaca IEX)  │
-│  Port: 8000     │    │                 │    │                 │
+│  Port: 8001     │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          ▲                       ▲                       ▲
          │                       │                       │
@@ -72,110 +51,53 @@ A comprehensive, microservices-based algorithmic trading platform built with Pyt
                                  │
                     ┌─────────────────┐    ┌─────────────────┐
                     │   Strategies    │    │    Executor     │
-                    │   (Signals)     │    │ (Order Management)│
-                    │                 │    │                 │
+                    │   (Signals)     │    │ (Order Mgmt)    │
                     └─────────────────┘    └─────────────────┘
                                  │
                     ┌─────────────────┐    ┌─────────────────┐
                     │   Simulator     │    │   Backtester    │
                     │ (Historical)    │    │ (Rapid Testing) │
-                    │                 │    │                 │
                     └─────────────────┘    └─────────────────┘
 ```
 
-The platform implements a distributed architecture where each component communicates through a Redis-based message bus using Redis Streams for reliable message delivery with automatic fallback to Pub/Sub for compatibility. The system processes real-time market data, simulates historical trading scenarios, generates trading signals using multiple strategies, validates them through comprehensive risk management, and executes orders through the Alpaca broker API.
+The platform uses a distributed, event-driven architecture where components communicate through Redis Streams for reliable message delivery with automatic fallback to Pub/Sub.
 
-## 🚀 Core Features
-
-### Market Data Pipeline
-- **Real-time Data Ingestion**: Connects to Alpaca Markets API for live and historical market data
-- **Historical Data Simulation**: Replays historical market data through the message bus at configurable speeds
-- **IEX Feed Support**: Uses Alpaca's IEX data feed, compatible with free paper trading accounts
-- **CSV Data Support**: Loads and processes historical data from CSV files for offline testing
-- **Redis Streams Integration**: Primary message backend using Redis Streams with consumer groups for guaranteed delivery
-- **Automatic Fallbacks**: Intelligent fallback chain: Redis Streams → Redis Pub/Sub → FakeRedis
-- **Redis 6.0+ Support**: Compatible with Redis 6.0+ with automatic feature detection
-
-### Trading Strategy Engine
-- **Multiple Strategy Support**: Implements both random and technical analysis-based trading strategies
-- **Signal Generation**: Produces buy/sell signals with confidence scores and metadata
-- **Technical Indicators**: Includes SMA, RSI, MACD, and other technical analysis indicators
-- **Configurable Parameters**: Strategies can be tuned through configuration files
-
-### Risk Management System
-- **Multi-layer Validation**: Comprehensive signal validation including market hours, position limits, and confidence thresholds
-- **Rate Limiting**: Intelligent rate limiting using monotonic time to prevent over-trading
-- **Circuit Breakers**: Automatic fault isolation and recovery mechanisms
-- **Position Sizing**: Dynamic position sizing based on risk parameters and portfolio value
-- **Emergency Controls**: Manual emergency stop functionality
-
-### Order Execution
-- **Alpaca Integration**: Direct integration with Alpaca Markets for order execution
-- **Retry Logic**: Exponential backoff retry logic for API calls with intelligent error handling
-- **Partial Fill Management**: Comprehensive tracking and management of partial order fills
-- **Order Validation**: Pre-execution validation including position checks and risk limits
-
-### Backtesting & Simulation
-- **Historical Simulator**: End-to-end backtesting by replaying historical data through the complete trading pipeline
-- **Rapid Backtester**: Off-bus quick strategy validation with synthetic or real market data
-- **Performance Metrics**: Comprehensive backtesting metrics including Sharpe ratio, maximum drawdown, and win rates
-- **Data Flexibility**: Supports both Alpaca API data and CSV file inputs for testing
-- **Configurable Speed**: Variable replay speeds for efficient historical simulation
-- **Visual Results**: Automatic chart generation with performance plots saved to `out/` directory
-- **Realistic Trading**: Includes notional values, slippage modeling, and transaction costs
-
-### Monitoring & Observability
-- **Prometheus Metrics**: Comprehensive system and business metrics collection on port 8013
-- **Grafana Dashboards**: Real-time visualization and alerting capabilities
-- **Health Monitoring**: Automated health checks for all services with detailed status reporting
-- **Service Logging**: Individual log files for each service component
-- **Real-time Dashboard**: WebSocket-based live trading dashboard
-- **Message Bus Metrics**: Stream length, consumer lag, pending messages, and throughput monitoring
-- **Business Metrics**: Signal generation, order execution, portfolio value, and P&L tracking
-
-### Service Management
-- **Control System**: Comprehensive service management through `scripts/control.py`
-- **Health Checking**: Strict health validation with exponential backoff
-- **Process Management**: PID tracking and graceful shutdown for all services
-- **Port Management**: Intelligent port cleanup to prevent conflicts
-- **Dependency Validation**: Automatic checking of service dependencies
+---
 
 ## 📋 Prerequisites
 
+**Required:**
 - Python 3.9+
-- Redis Server 6.0+ (optional - automatic FakeRedis fallback available)
-- Alpaca Markets Account (Paper Trading) - optional for CSV-based testing
-- `lsof` utility (recommended)
-- **Prometheus client (Python)** for metrics exposure
-- (Optional) `lsof`, `curl`, `sed` for QA utilities
+- Redis Server 6.0+ (or automatic FakeRedis fallback)
+
+**Recommended:**
 - 8GB RAM minimum
 - Linux/macOS/WSL2/Windows
+- Alpaca Markets Paper Trading Account (optional for CSV-based testing)
+
+**Optional Tools:**
+- `lsof` for port management
+- `curl` for API testing
 
 ### Redis Compatibility
-- **Redis 6.2+**: Full feature support including `XAUTOCLAIM` for automatic message recovery
-- **Redis 6.0-6.1**: Compatible with manual consumer group management (automatic recovery disabled)
-- **No Redis**: Automatic FakeRedis fallback for development
 
-### Recommended Environment Variables
+| Version | Streams Support | Auto Recovery | Status |
+|---------|----------------|---------------|--------|
+| 6.2+ | ✅ Full | ✅ Yes | ✅ Recommended |
+| 6.0-6.1 | ⚠️ Limited | ⚠️ Manual | ⚠️ Compatible |
+| < 6.0 | ❌ None | ❌ No | ❌ Use Pub/Sub |
+
+---
+
+## 🚀 Quick Start
+
+### 1. Installation
 
 ```bash
-export REDIS_URL="redis://localhost:6379/0"
-export BUS_BACKEND=streams
-# Force real Redis during QA (avoid fallback to fakeredis)
-unset FORCE_FAKE_REDIS FAKE_REDIS
-export USE_FAKE_REDIS=0
-```
-
-## 🛠️ Installation
-
-### 1. Clone Repository
-```bash
+# Clone repository
 git clone <repository-url>
 cd algorithmic-trading-platform
-```
 
-### 2. Environment Setup
-```bash
 # Create virtual environment
 python -m venv venv
 source venv/bin/activate  # Linux/macOS
@@ -186,79 +108,68 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 
-### 3. Configuration
+### 2. Configuration
+
 ```bash
 # Copy environment template
 cp .env.template .env
 
-# Edit with your Alpaca credentials (optional for CSV testing)
+# Edit configuration (optional for CSV testing)
 nano .env
 ```
 
-Required environment variables (for live data):
+**Key Environment Variables:**
 ```bash
-# Alpaca API Configuration (optional)
+# Alpaca API (optional - for live data)
 APCA_API_BASE_URL=https://paper-api.alpaca.markets
 APCA_API_KEY_ID=your_key_here
 APCA_API_SECRET_KEY=your_secret_here
-
-# Data Feed Configuration
-ALPACA_DATA_FEED=iex  # Use 'iex' for free accounts, 'sip' for premium
+ALPACA_DATA_FEED=iex  # 'iex' for free, 'sip' for premium
 
 # Trading Configuration
 SYMBOLS=AAPL,MSFT,GOOGL,TSLA,NVDA
 HISTORICAL_DAYS=7
 RISK_PCT=0.02
 
-# Message Bus Configuration
-BUS_BACKEND=streams        # 'streams' (preferred) or 'pubsub'
+# Message Bus (Redis Streams preferred)
+BUS_BACKEND=streams
 REDIS_URL=redis://127.0.0.1:6379
-REDIS_DB=0
-USE_FAKE_REDIS=0          # Set to 1 to force FakeRedis
+USE_FAKE_REDIS=0  # Set to 1 for development
 
-# Metrics Configuration
-RISK_METRICS_PORT=8011    # Risk Manager metrics
-EXECUTOR_METRICS_PORT=8012 # Executor metrics
-STRATEGIES_METRICS_PORT=8013 # Strategies metrics
-SIMULATOR_METRICS_PORT=8014 # Simulator metrics
-PNL_METRICS_PORT=8015     # PnL Aggregator metrics
-API_METRICS_PORT=8016     # API metrics
-
-# Backtest Configuration
-MAX_CONCURRENT_JOBS=2     # Maximum concurrent backtest jobs
+# Metrics Ports
+RISK_METRICS_PORT=8011
+EXECUTOR_METRICS_PORT=8012
+API_METRICS_PORT=8016
 ```
 
-### 4. Infrastructure Setup
+### 3. Infrastructure Setup
+
 ```bash
 # Automated setup (installs Prometheus and Grafana)
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 
-# Manual setup
+# Or manual setup
 python scripts/setup_infrastructure.py
 ```
 
-## 🚀 Quick Start
-
-### Smoke Test (Recommended First Step)
-
-Verify your system setup with this simple 3-terminal test:
+### 4. Verify Installation
 
 **Terminal A - Risk Manager:**
 ```bash
-export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379 REDIS_DB=0 BUS_GROUP=trader RISK_METRICS_PORT=8013
+export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379
 python apps/risk_manager/main.py
 ```
 
 **Terminal B - Executor:**
 ```bash
-export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379 REDIS_DB=0 BUS_GROUP=trader
+export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379
 python apps/executor/main.py
 ```
 
-**Terminal C - Publish Test Signal:**
+**Terminal C - Test Signal:**
 ```bash
-export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379 REDIS_DB=0
+export BUS_BACKEND=streams REDIS_URL=redis://127.0.0.1:6379
 python -c "
 from lib.bus import connect_bus, get_bus
 from lib.models import Signal, SignalSide
@@ -266,41 +177,24 @@ from decimal import Decimal
 connect_bus(); bus = get_bus()
 sig = Signal(symbol='GOOGL', side=SignalSide.BUY, confidence=Decimal('0.9'), price=Decimal('151.00'), source='smart_technical')
 bus.publish_signal(sig)
-print('Signal published')
+print('✅ Signal published')
 "
 ```
 
 **Expected Output:**
 - Risk Manager: `✅ Signal approved and order created: GOOGL BUY confidence=0.9`
 - Executor: `Received order intent: GOOGL BUY qty=65 notional=9965.00`
-- Prometheus metrics: http://127.0.0.1:8013/metrics
-- Stream status: `Backend: streams`, `RedisStreamsBus health: OK`
 
-### Redis 6.0 Troubleshooting
+---
 
-If you encounter issues with consumer groups on Redis 6.0:
-```bash
-# Reset consumer group (if needed)
-redis-cli XGROUP DESTROY orders.intent order_processors
-redis-cli XGROUP CREATE orders.intent order_processors "$" MKSTREAM
-```
+## 💡 Usage Guide
 
-### Rapid Strategy Testing
+### Rapid Strategy Backtesting
 
-Test trading strategies quickly without full system setup:
+Test strategies quickly without full system setup:
 
 ```bash
-# Quick backtest with real Alpaca data (requires credentials)
-python scripts/sim_random.py \
-  --symbol GOOGL \
-  --start 2022-01-01 \
-  --end 2024-01-01 \
-  --initial-cash 100000 \
-  --position-notional 10000 \
-  --signal-prob 0.02 \
-  --seed 42
-
-# Backtest with realistic slippage and costs
+# Quick backtest with Alpaca data
 python scripts/sim_random.py \
   --symbol GOOGL \
   --start 2023-01-01 \
@@ -308,31 +202,39 @@ python scripts/sim_random.py \
   --initial-cash 100000 \
   --position-notional 10000 \
   --signal-prob 0.05 \
-  --slippage-bps 3 \
+  --seed 42 \
   --plot out/GOOGL.png
+
+# Backtest with CSV data
+python scripts/sim_random.py \
+  --symbol AAPL \
+  --start 2023-01-01 \
+  --end 2023-12-31 \
+  --csv data/csv/AAPL.csv \
+  --position-size 0.1 \
+  --output backtest_results.json
 ```
 
 **Features:**
-- **Visual Results**: Generates performance charts in `out/GOOGL.png`
-- **Realistic Modeling**: Includes slippage, transaction costs, and notional values
-- **Performance Metrics**: Sharpe ratio, max drawdown, total return, win rate
-- **Data Sources**: Supports Alpaca API or CSV files
-- **Risk Management**: Position sizing and stop-loss simulation
+- 📊 Generates performance charts
+- 💰 Includes slippage and transaction costs
+- 📈 Calculates Sharpe ratio, max drawdown, total return
+- 🎲 Reproducible with `--seed` parameter
 
 ### Historical Data Simulation
 
-Replay historical data through the complete trading pipeline:
+Replay historical data through the complete pipeline:
 
 ```bash
-# Simulate with Alpaca data and reproducible seed
+# Simulate with Alpaca data
 python apps/simulator/main.py \
-  --symbols AAPL,GOOGL,TSLA,MSFT \
+  --symbols AAPL,GOOGL,TSLA \
   --start 2024-01-01 \
   --end 2024-01-31 \
   --timeframe 1Day \
   --speed 5.0 \
   --seed 42 \
-  --no-delays \
+  --persist \
   --output simulation_results.json
 
 # Simulate with CSV data
@@ -341,15 +243,80 @@ python apps/simulator/main.py \
   --start 2024-01-01 \
   --end 2024-12-31 \
   --csv data/csv \
-  --seed 12345
+  --persist
 ```
 
-### Reproducible Strategy Configuration
+**Persistence Features:**
+- 💾 SQLite database with complete history
+- 📤 Export to CSV and Parquet formats
+- 🔒 SHA256 verification for reproducibility
+- 📁 Organized output in `out/run_<timestamp>_<uuid>/`
 
-Control strategy behavior dynamically through system events:
+### Service Management
+
+```bash
+# Start complete platform
+python scripts/control.py start
+
+# Start infrastructure only
+python scripts/control.py start-infra
+
+# Start trading services
+python scripts/control.py start-trading
+
+# Check system status
+python scripts/control.py status
+
+# Stop all services
+python scripts/control.py stop
+```
+
+### Individual Services
+
+```bash
+# Infrastructure
+python scripts/control.py start-redis
+python scripts/control.py start-api
+python scripts/control.py start-prometheus
+python scripts/control.py start-grafana
+
+# Trading components
+python scripts/control.py start-trading
+```
+
+### Backtest API
+
+```bash
+# Create backtest job
+curl -X POST http://127.0.0.1:8001/backtest/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbols": ["AAPL", "GOOGL"],
+    "start_date": "2023-01-01",
+    "end_date": "2023-12-31",
+    "timeframe": "1Day",
+    "seed": 42,
+    "strategies": ["random_50_50"]
+  }'
+
+# Quick backtest
+curl -X POST "http://127.0.0.1:8001/backtest/quick?symbols=AAPL&days=30&seed=42"
+
+# List all jobs
+curl http://127.0.0.1:8001/backtest/jobs
+
+# Get job status
+curl http://127.0.0.1:8001/backtest/jobs/{job_id}
+
+# Download results
+curl http://127.0.0.1:8001/backtest/jobs/{job_id}/download -o results.json
+```
+
+### Dynamic Strategy Configuration
+
+Control strategy behavior in real-time:
 
 ```python
-# Publish strategy configuration event
 from lib.bus import connect_bus, get_bus
 
 connect_bus()
@@ -368,192 +335,196 @@ bus.publish_system_event(
 
 **What happens:**
 1. Event published to Redis `system` stream
-2. Strategy Engine consumes via `system_processors` consumer group
-3. Random50Strategy updates its numpy RNG with new seed
-4. All subsequent random signals become deterministic
+2. Strategy Engine consumes via consumer group
+3. Strategy updates its RNG with new seed
+4. All subsequent signals become deterministic
 
-**Logs you'll see:**
-```
-Starting to consume strategy configuration events...
-Processing strategy config from backtester
-Random50Strategy seed updated to: 42
-```
+---
 
-### Service Management
-
-The platform uses a comprehensive control system for managing all services:
-
-```bash
-# Start complete platform
-python scripts/control.py start
-
-# Start infrastructure only (Redis, API, Prometheus, Grafana)
-python scripts/control.py start-infra
-
-# Start trading services only
-python scripts/control.py start-trading
-
-# Stop all services
-python scripts/control.py stop
-
-# Check system status
-python scripts/control.py status
-```
-
-### Individual Service Control
-```bash
-# Infrastructure services
-python scripts/control.py start-redis
-python scripts/control.py start-api
-python scripts/control.py start-prometheus
-python scripts/control.py start-grafana
-
-# Trading services
-python scripts/control.py start-trading
-```
-
-### System Verification
-```bash
-# Check all services status
-python scripts/control.py status
-
-# Test API health
-curl -s http://127.0.0.1:8000/health
-
-# View service logs
-tail -f logs/api.log
-tail -f logs/data_ingestor.log
-```
-
-## 📊 Access Points
+## 🌐 Access Points
 
 | Service | URL | Credentials | Description |
 |---------|-----|-------------|-------------|
-| **Trading API** | http://127.0.0.1:8000 | None | REST API and system monitoring |
-| **API Documentation** | http://127.0.0.1:8000/docs | None | Interactive API documentation |
-| **Live Dashboard** | http://127.0.0.1:8000/dashboard | None | Real-time trading dashboard |
-| **Backtest Jobs** | http://127.0.0.1:8000/backtest/jobs | None | Backtest job management |
-| **Prometheus (Global)** | http://127.0.0.1:9090 | None | System-wide metrics collection |
-| **Risk Manager Metrics** | http://127.0.0.1:8011/metrics | None | Risk management metrics |
-| **Executor Metrics** | http://127.0.0.1:8012/metrics | None | Order execution metrics |
-| **Strategies Metrics** | http://127.0.0.1:8013/metrics | None | Strategy performance metrics |
-| **Simulator Metrics** | http://127.0.0.1:8014/metrics | None | Historical simulation metrics |
-| **PnL Metrics** | http://127.0.0.1:8015/metrics | None | Portfolio P&L metrics |
-| **API Metrics** | http://127.0.0.1:8016/metrics | None | API service metrics |
-| **Grafana** | http://127.0.0.1:3000 | admin / trading123 | Advanced dashboard and alerting |
+| **Trading API** | http://127.0.0.1:8001 | None | REST API and monitoring |
+| **API Docs** | http://127.0.0.1:8001/docs | None | Interactive Swagger UI |
+| **Live Dashboard** | http://127.0.0.1:8001/dashboard | None | Real-time trading dashboard |
+| **Backtest Jobs** | http://127.0.0.1:8001/backtest/jobs | None | Job management |
+| **Prometheus** | http://127.0.0.1:9090 | None | Metrics collection |
+| **Grafana** | http://127.0.0.1:3000 | admin / trading123 | Dashboards & alerts |
 
-## 🌐 Metrics Endpoints & Ports
+### Metrics Endpoints
 
-| Component | Port | URL | Notes |
-| --------- | :--: | --- | ----- |
-| Risk Manager (origin) | 8011 | `http://127.0.0.1:8011/metrics` | May respond 405 to `HEAD` (use `GET`) |
-| Executor (origin) | 8012 | `http://127.0.0.1:8012/metrics` | Same as above |
-| Sidecar Risk (strict) | 9911 | `http://127.0.0.1:9911/metrics` | CT: `text/plain; version=0.0.4; charset=utf-8` |
-| Sidecar Exec (strict) | 9912 | `http://127.0.0.1:9912/metrics` | CT: `text/plain; version=0.0.4; charset=utf-8` |
+| Component | Port | URL |
+|-----------|------|-----|
+| Risk Manager | 8011 | http://127.0.0.1:8011/metrics |
+| Executor | 8012 | http://127.0.0.1:8012/metrics |
+| Strategies | 8013 | http://127.0.0.1:8013/metrics |
+| Simulator | 8014 | http://127.0.0.1:8014/metrics |
+| PnL Aggregator | 8015 | http://127.0.0.1:8015/metrics |
+| API | 8016 | http://127.0.0.1:8016/metrics |
 
-> **Note:** Sidecars respond to `HEAD` and set the official header; origins expose metrics with Prometheus client `Content-Type`.
+---
 
-## 🏗️ System Components
+## 📊 Key Metrics
 
-### Data Ingestor (`apps/data_ingestor/`)
-Handles market data acquisition from Alpaca Markets:
-- Downloads historical price data for configured symbols
-- Provides live market data updates every minute
-- Supports both IEX (free) and SIP (premium) data feeds
-- Publishes all market data to Redis message bus
-- Includes comprehensive error handling and retry logic
+### Business Metrics
+```promql
+# Trading Activity
+signals_received_total{source="smart_technical"}
+signals_approved_total{symbol="GOOGL"}
+signals_rejected_total{reason="market_hours"}
+order_intents_published_total{symbol="GOOGL"}
 
-### Historical Simulator (`apps/simulator/`)
-Replays historical market data for end-to-end backtesting:
-- Loads data from Alpaca API or CSV files
-- Publishes historical bars through the message bus at configurable speeds
-- Supports multiple symbols with parallel simulation
-- Provides simulation statistics and progress tracking
-- Enables complete pipeline testing with historical data
+# Risk Management
+risk_checks_total{check="market_hours"}
+risk_violations_total{type="position_limit"}
+portfolio_value_usd{account="paper"}
+position_size{symbol="GOOGL"}
 
-### Strategy Engine (`apps/strategies/`)
-Implements trading signal generation:
-- **Random Strategy**: Simple random buy/sell signal generation for testing
-- **Technical Strategy**: Advanced technical analysis using SMA, RSI, and MACD indicators
-- Signal confidence scoring and metadata tracking
-- Configurable parameters for each strategy
-- Rate limiting to prevent signal spam
+# Order Execution
+duplicate_order_blocked_by_client_id_total{symbol}
+broker_429_retries_total{operation, success}
+```
 
-### Risk Manager (`apps/risk_manager/`)
-Comprehensive risk management and signal validation:
-- Market hours validation using US/Eastern timezone
-- Position size calculations based on portfolio risk
-- Rate limiting using monotonic time-based windows
-- Circuit breaker patterns for fault isolation
+### System Metrics
+```promql
+# Message Bus Health
+redis_streams_length{stream="signals"}
+redis_streams_pending{group="signal_processors"}
+redis_streams_lag{group="signal_processors"}
+
+# Performance
+redis_operation_duration_seconds{operation="xadd"}
+message_processing_duration_seconds{type="signal"}
+system_uptime_seconds
+```
+
+---
+
+## 🎛️ System Components
+
+### Data Ingestor
+- Downloads market data from Alpaca Markets
+- Supports IEX (free) and SIP (premium) feeds
+- Publishes bars to message bus
+- Handles rate limiting and retries
+
+### Historical Simulator
+- Replays historical data for backtesting
+- Loads from Alpaca API or CSV files
+- Configurable playback speed
+- Persistence with SQLite/CSV/Parquet export
+
+### Strategy Engine
+- **Random Strategy**: Testing and baseline generation
+- **Technical Strategy**: SMA, RSI, MACD indicators
+- Confidence scoring and metadata
+- Real-time configuration via system events
+
+### Risk Manager
+- Market hours validation (NYSE/NASDAQ calendar)
+- Position sizing and limits
+- Rate limiting and circuit breakers
 - Emergency stop functionality
-- Persistent deduplication across service restarts
+- Persistent deduplication
 
-### Executor (`apps/executor/`)
-Order execution and management:
-- Direct integration with Alpaca Markets API
-- Exponential backoff retry logic for API reliability
-- Comprehensive partial fill tracking and management
-- Position validation before order submission
-- Order status monitoring and fill reporting
+### Executor
+- Alpaca Markets integration
+- Order lifecycle management (13-state FSM)
+- Idempotent order submission
+- Automatic timeout handling
+- Partial fill tracking
 
-### API Service (`apps/api/`)
-REST API and monitoring interface:
-- Health check endpoints with detailed status reporting
-- Manual signal creation and management
-- Portfolio and position monitoring
-- Historical signal and trade data
-- Real-time WebSocket dashboard
+### API Service
+- REST endpoints for monitoring and control
+- WebSocket dashboard for real-time updates
+- Backtest job management
 - Prometheus metrics exposure
+- Health checks and system status
 
-### Rapid Backtester (`scripts/sim_random.py`)
-Quick strategy validation tool:
-- Off-bus backtesting for rapid strategy development
-- Supports Alpaca API data download or CSV file input
-- Synthetic data generation for testing when no data available
-- Performance metrics calculation including Sharpe ratio and drawdown
-- Optional visualization with matplotlib
-- Configurable risk parameters and position sizing
+### Message Bus
+- **Redis Streams** (primary): Consumer groups, auto-recovery
+- **Redis Pub/Sub** (fallback): Compatible with Redis < 6.0
+- **FakeRedis** (development): In-memory testing
+- Automatic reconnection and health monitoring
 
-### Message Bus (`lib/bus.py`)
-Redis-based message communication with intelligent fallbacks:
-- **Redis Streams** (primary): Reliable message delivery with consumer groups and automatic recovery
-- **Redis Pub/Sub** (fallback): Compatible with older Redis versions
-- **FakeRedis** (development): In-memory Redis simulation for testing
-- **Smart Recovery**: Automatic handling of pending messages (Redis 6.2+) or manual reset for Redis 6.0
-- **Consumer Groups**: Distributed message processing with load balancing
-- **Message Persistence**: Durable message storage with replay capability
-- **Health Monitoring**: Built-in connection health checks and automatic reconnection
+---
 
-### System Events Architecture (`lib/bus_streams.py`)
-Real-time configuration and control system:
-- **Event Types**: `strategy_config`, `service_start`, `service_stop`, `emergency_stop`
-- **Consumer Groups**: Uses `system_processors` group for reliable event delivery
-- **Safe ACK Pattern**: Messages ACKed only after successful processing
-- **Redis 6.0 Support**: Manual pending message reclaim using XPENDING + XCLAIM
-- **Dynamic Configuration**: Real-time strategy parameter updates without service restarts
-- **Python 3.10 Compatible**: Robust timestamp parsing for ISO-8601 with 'Z' suffix
+## 🧪 Testing & Validation
+
+### Unit Tests
+```bash
+# Run all tests
+python -m pytest -v
+
+# Run specific test files
+python -m pytest tests/test_epic4_idempotency.py -v
+python -m pytest tests/test_edge_cases.py -v
+python -m pytest tests/test_load_performance.py -v
+
+# Run with coverage
+python -m pytest --cov=lib --cov=apps -v
+```
+
+### Integration Tests
+```bash
+# Low-level Streams testing
+export REDIS_URL="redis://localhost:6379/0"
+python scripts/qa/streams_low_level_check.py
+
+# End-to-end pipeline
+bash scripts/qa/e2e_streams_pipeline.sh
+
+# Metrics validation
+bash scripts/qa/metrics_smoke_strict.sh
+```
+
+### API Testing
+```bash
+# Test backtest API
+python -m pytest tests/test_backtest_api.py -v
+
+# Manual API testing
+curl http://127.0.0.1:8001/health
+curl http://127.0.0.1:8001/status
+```
+
+### Manual Testing
+```bash
+# Test strategy with simulation
+python apps/simulator/main.py \
+  --symbols AAPL,GOOGL \
+  --start 2024-01-01 \
+  --end 2024-01-02 \
+  --csv data/csv \
+  --no-delays
+
+# Monitor in another terminal
+tail -f logs/strategies.log
+tail -f logs/risk_manager.log
+tail -f logs/executor.log
+```
+
+---
 
 ## 🔧 Configuration
 
 ### Trading Configuration (`configs/base.yaml`)
 ```yaml
-# Market symbols to trade
 symbols:
   - "AAPL"
-  - "MSFT" 
+  - "MSFT"
   - "GOOGL"
   - "TSLA"
   - "NVDA"
 
-# Risk management parameters
 risk:
-  max_daily_loss: 0.05          # 5% maximum daily loss
-  max_portfolio_risk: 0.20      # 20% maximum portfolio risk
-  max_position_size: 0.10       # 10% maximum position size
-  stop_loss_pct: 0.02           # 2% stop loss
-  take_profit_pct: 0.06         # 6% take profit
+  max_daily_loss: 0.05          # 5%
+  max_portfolio_risk: 0.20      # 20%
+  max_position_size: 0.10       # 10%
+  stop_loss_pct: 0.02           # 2%
+  take_profit_pct: 0.06         # 6%
 
-# Strategy configurations
 strategies:
   - name: "random_50_50"
     enabled: true
@@ -562,373 +533,56 @@ strategies:
     enabled: true
     risk_per_trade: 0.05
 
-# Simulation parameters
 simulation:
-  default_speed: 1.0            # Real-time speed multiplier
-  max_speed: 100.0              # Maximum simulation speed
-  default_timeframe: "1Day"     # Default data timeframe
+  default_speed: 1.0
+  max_speed: 100.0
+  default_timeframe: "1Day"
 ```
 
-### Data Feed Configuration
-The system supports multiple data sources and feed types:
-
-**Alpaca Integration**:
-- Supports both IEX (free) and SIP (premium) feeds
-- Automatic TimeFrame mapping for different intervals
-- Handles 1Min, 5Min, 1Hour, and 1Day timeframes
-- Robust error handling and retry logic
-
-**CSV Data Format**:
+### CSV Data Format
 ```csv
 timestamp,open,high,low,close,volume
 2024-01-01,150.00,152.00,149.00,151.00,1000000
 2024-01-02,151.00,153.00,150.50,152.50,1200000
 ```
 
-**Message Bus Configuration**:
-```bash
-# Use Redis Streams (preferred)
-export BUS_BACKEND=streams
-export USE_FAKE_REDIS=0
+Place CSV files in `data/csv/SYMBOL.csv` format.
 
-# Use Pub/Sub fallback
-export BUS_BACKEND=pubsub
-
-# Force FakeRedis (development)
-export USE_FAKE_REDIS=1
-```
-
-## 📈 Monitoring
-
-### Service Health Monitoring
-The control system performs comprehensive health checking:
-- HTTP health checks for all web services with exponential backoff
-- Redis connectivity and performance monitoring
-- Process status and resource usage tracking
-- Automatic service restart on failure detection
-- Port conflict detection and cleanup
-
-### Message Bus Monitoring
-Track message flow and system health:
-```bash
-# Monitor Redis Streams (if using Redis Streams)
-redis-cli XINFO GROUPS signals
-redis-cli XLEN bars
-redis-cli XINFO CONSUMERS signals signal_processors
-
-# Check message bus health
-curl -s http://127.0.0.1:8000/health | jq '.message_bus'
-```
-
-### Prometheus Metrics
-
-The Risk Manager exposes comprehensive metrics on port 8013:
-
-**Access Metrics:**
-```bash
-curl http://127.0.0.1:8013/metrics
-```
-
-**Key Metrics Collected:**
-```promql
-# Stream Health and Performance
-redis_streams_length{stream="signals"}              # Pending messages
-redis_streams_consumers{group="signal_processors"}   # Active consumers
-redis_streams_pending{group="signal_processors"}     # Unacked messages
-redis_streams_lag{group="signal_processors"}         # Consumer lag
-
-# Business Metrics
-signals_received_total{source="smart_technical"}     # Signals by source
-signals_approved_total{symbol="GOOGL"}               # Approved signals
-signals_rejected_total{reason="market_hours"}        # Rejection reasons
-order_intents_published_total{symbol="GOOGL"}        # Orders sent
-
-# Risk Metrics
-risk_checks_total{check="market_hours"}              # Risk check counts
-risk_violations_total{type="position_limit"}         # Risk violations
-portfolio_value_usd{account="paper"}                 # Portfolio value
-position_size{symbol="GOOGL"}                        # Position sizes
-
-# System Performance
-redis_operation_duration_seconds{operation="xadd"}   # Redis latency
-message_processing_duration_seconds{type="signal"}   # Processing time
-system_uptime_seconds                                 # Service uptime
-```
-
-**Grafana Integration:**
-- Pre-configured dashboards available
-- Real-time alerts on system health
-- Business metrics visualization
-- Performance monitoring
-
-### Grafana Dashboards
-Pre-configured dashboards for:
-- System overview and health status
-- Trading activity and performance
-- Data pipeline monitoring with message flow
-- Backtesting results and strategy performance
-- Resource usage and performance metrics
-
-### Logging System
-Each service maintains individual log files in the `logs/` directory:
-```
-logs/
-├── api.log                 # API service logs
-├── data_ingestor.log      # Market data ingestion
-├── strategies.log         # Trading strategy engine  
-├── risk_manager.log       # Risk management system
-├── executor.log          # Order execution
-├── simulator.log         # Historical simulation
-├── prometheus.log        # Metrics collection
-└── grafana.log           # Dashboard system
-```
-
-## 🧪 Testing & Validation
-
-### QA / Epic Validation
-
-#### 1) Low-level Streams Testing (Epic 1)
-
-Verifies consumer groups and ACK pattern correctness:
-
-```bash
-export REDIS_URL="redis://localhost:6379/0"
-python scripts/qa/streams_low_level_check.py
-# Should finish with: PASS (and pending=0)
-```
-
-#### 2) End-to-End Complete Testing (Epics 1+2)
-
-Script that starts/stops services, runs minimal simulation, starts sidecars and validates everything:
-
-```bash
-# Base environment (see previous section)
-export REDIS_URL="redis://localhost:6379/0"
-export BUS_BACKEND=streams
-unset FORCE_FAKE_REDIS FAKE_REDIS
-export USE_FAKE_REDIS=0
-
-bash scripts/qa/e2e_streams_pipeline.sh
-# Expected:
-#  - Origins 8011/8012: code=200 and Prometheus body
-#  - Sidecars 9911/9912: strict CT "text/plain; version=0.0.4; charset=utf-8"
-#  - "E2E PASS"
-```
-
-#### 3) Strict Sidecars Smoke Testing (Epic 2)
-
-Validates that sidecars return **200** with **Content-Type 0.0.4** and valid Prometheus body:
-
-```bash
-bash scripts/qa/metrics_smoke_strict.sh
-# Expected: both endpoints OK
-```
-
-### System Events Testing
-
-Test the system events architecture and reproducible strategies:
-
-```bash
-# Run contract tests
-pytest -q \
-  tests/test_system_events_contract.py::test_backend_exposes_subscribe_system_events \
-  tests/test_system_events_contract.py::test_bus_subscribe_system_events_consumes_one_event_isolated \
-  tests/test_system_events_contract.py::test_publish_and_consume_system_with_xreadgroup
-
-# Test timestamp parsing compatibility (Python 3.10)
-pytest -q tests/test_timeutils_parse_timestamp.py
-
-# Manual system events test
-python test_system_events_demo.py
-
-# End-to-end seed flow test
-python test_seed_flow_demo.py
-```
-
-**Expected Results:**
-- All contract tests should pass
-- System events should flow through Redis `system` stream
-- Strategies should receive configuration updates
-- Seed changes should be applied dynamically
-
-### Redis Streams Diagnostics
-
-Monitor system events and consumer groups:
-
-```bash
-# Check system stream status
-redis-cli XINFO GROUPS system
-redis-cli XINFO CONSUMERS system system_processors
-redis-cli XLEN system
-
-# View recent system events
-redis-cli XREVRANGE system + - COUNT 5
-
-# Check for pending messages
-redis-cli XPENDING system system_processors
-
-# Reset consumer group if needed (Redis 6.0 compatibility)
-redis-cli XGROUP SETID system system_processors $
-```
-
-### Quick Strategy Testing
-```bash
-# Test with synthetic data
-python scripts/sim_random.py \
-  --symbol GOOGL \
-  --start 2022-01-01 \
-  --end 2024-01-01 \
-  --initial-cash 100000 \
-  --position-notional 10000 \
-  --signal-prob 0.05 \
-  --seed 42
-
-# Test with CSV data (alternative to --position-notional)
-python scripts/sim_random.py \
-  --symbol GOOGL \
-  --start 2023-01-01 \
-  --end 2023-12-31 \
-  --csv data/csv/GOOGL.csv \
-  --position-size 0.1 \
-  --output backtest_results.json
-```
-
-### End-to-End Pipeline Testing
-```bash
-# Simulate historical data through complete pipeline
-python apps/simulator/main.py \
-  --symbols AAPL,GOOGL \
-  --start 2024-01-01 \
-  --end 2024-01-31 \
-  --timeframe 1Day \
-  --speed 10.0 \
-  --no-delays
-
-# Monitor pipeline in another terminal
-tail -f logs/data_ingestor.log
-tail -f logs/strategies.log
-tail -f logs/risk_manager.log
-```
-
-### API Testing
-```bash
-# Health check
-curl -s http://127.0.0.1:8000/health
-
-# Manual signal creation
-curl -X POST http://127.0.0.1:8000/signals/manual \
-  -H "Content-Type: application/json" \
-  -d '{"symbol":"AAPL","side":"BUY","confidence":0.8,"price":150.0}'
-
-# View signal history
-curl -s http://127.0.0.1:8000/signals/history
-
-# Check message bus stats
-curl -s http://127.0.0.1:8000/status | jq '.message_bus'
-```
-
-### Backtest API Testing
-```bash
-# Create a backtest job
-curl -X POST http://127.0.0.1:8000/backtest/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbols": ["AAPL", "GOOGL"],
-    "start_date": "2022-01-01",
-    "end_date": "2022-01-31",
-    "timeframe": "1Day",
-    "seed": 42,
-    "strategies": ["random_50_50"]
-  }'
-
-# Quick backtest
-curl -X POST "http://127.0.0.1:8000/backtest/quick?symbols=AAPL&days=30&seed=42"
-
-# List all jobs
-curl -s http://127.0.0.1:8000/backtest/jobs
-
-# Get job status
-curl -s http://127.0.0.1:8000/backtest/jobs/{job_id}
-
-# Download results
-curl -s http://127.0.0.1:8000/backtest/jobs/{job_id}/download -o results.json
-
-# Get backtest statistics
-curl -s http://127.0.0.1:8000/backtest/stats
-```
-
-### System Validation
-```bash
-# Start monitoring stack
-./scripts/start-monitoring.sh
-
-# Start trading system
-./scripts/start-with-metrics.sh
-
-# Verify pipeline with simulation
-python apps/simulator/main.py --symbols AAPL --start 2024-01-01 --end 2024-01-02 --csv data/csv
-
-# Access monitoring
-open http://localhost:3000  # Grafana (admin/admin123)
-open http://localhost:8000  # Trading UI
-```
+---
 
 ## 🔍 Troubleshooting
 
-### Metrics & Sidecars Issues
-
-**1) 502 in sidecar**
-
-* Usually indicates that the origin wasn't ready yet. Verify origins:
-
-  ```bash
-  curl -sI http://127.0.0.1:8011/metrics | tr -d '\r'
-  curl -sI http://127.0.0.1:8012/metrics | tr -d '\r'
-  ```
-* Check logs:
-
-  ```bash
-  tail -n +1 out/sidecar_*.log | sed -n '1,200p'
-  ```
-
-**2) `Address already in use` (8011/8012/9911/9912)**
-
-* Clean up ports and hanging processes:
-
-  ```bash
-  pkill -f "apps/risk_manager/main.py"    >/dev/null 2>&1 || true
-  pkill -f "apps/executor/main.py"        >/dev/null 2>&1 || true
-  pkill -f "scripts/qa/reexport_metrics.py" >/dev/null 2>&1 || true
-  lsof -tiTCP:8011,8012,9911,9912 -sTCP:LISTEN 2>/dev/null | xargs -r kill -9
-  ```
-
-**3) CRLF in scripts (Linux/macOS)**
-
+### Redis Connection Issues
 ```bash
-sed -i 's/\r$//' scripts/qa/*.sh
-sed -i 's/\r$//' scripts/qa/*.py
-```
-
-### Service Startup Issues
-```bash
-# Check service dependencies
-python scripts/launcher.py --check-deps
-
-# View service logs
-tail -f logs/api.log
-tail -f logs/prometheus.log
-
-# Check Redis connectivity
+# Check Redis status
 redis-cli ping  # Should return PONG
+redis-cli info server
 
 # Test with FakeRedis fallback
 export USE_FAKE_REDIS=1
 python scripts/control.py start-api
+
+# Force Pub/Sub mode
+export BUS_BACKEND=pubsub
 ```
 
-### Data Feed Issues
+### Service Startup Issues
 ```bash
-# Test Alpaca connectivity
+# Check service logs
+tail -f logs/api.log
+tail -f logs/risk_manager.log
+
+# Verify dependencies
+python scripts/launcher.py --check-deps
+
+# Clean up ports
+python scripts/control.py stop
+lsof -i :8001,6379,9090,3000
+```
+
+### Alpaca API Issues
+```bash
+# Test credentials
 python -c "
 from lib.settings import get_settings
 s = get_settings()
@@ -938,193 +592,70 @@ print(f'Data feed: {s.alpaca_data_feed}')
 
 # Use CSV fallback for testing
 mkdir -p data/csv
-# Place CSV files with format: timestamp,open,high,low,close,volume
+# Place CSV files here
 ```
 
-### Message Bus Issues
+### Redis 6.0 Compatibility
 ```bash
-# Check Redis status and version
-redis-cli info server
-redis-cli --version
+# Upgrade Redis (recommended)
+docker run -p 6379:6379 redis:7-alpine
 
-# Monitor message flow
-redis-cli MONITOR
+# Or reset consumer groups
+redis-cli XGROUP DESTROY signals signal_processors
+redis-cli XGROUP CREATE signals signal_processors "$" MKSTREAM
 
-# Check Redis Streams (Redis 6.0+)
-redis-cli XINFO GROUPS signals
-redis-cli XINFO CONSUMERS signals signal_processors
-redis-cli XLEN signals
-
-# Force Pub/Sub fallback
+# Or use Pub/Sub
 export BUS_BACKEND=pubsub
-
-# Use FakeRedis for development
-export USE_FAKE_REDIS=1
 ```
-
-### Redis 6.0 Compatibility Issues
-
-**Problem**: `XAUTOCLAIM` command not available in Redis 6.0-6.1
-```
-ERROR: Redis command XAUTOCLAIM not supported
-```
-
-**Note**: La plataforma detecta automáticamente Redis < 6.2 y desactiva la recuperación automática de pendientes (seguirá funcionando). Se recomienda actualizar a 6.2+ para habilitarla.
-
-**Solutions**:
-1. **Upgrade Redis** (Recommended):
-   ```bash
-   # Ubuntu/Debian
-   sudo apt update && sudo apt install redis-server
-
-   # macOS
-   brew upgrade redis
-
-   # Docker
-   docker run -p 6379:6379 redis:7-alpine
-   ```
-
-2. **Reset Consumer Group** (Redis 6.0 workaround):
-   ```bash
-   redis-cli XGROUP DESTROY signals signal_processors
-   redis-cli XGROUP DESTROY orders.intent order_processors
-   redis-cli XGROUP CREATE signals signal_processors "$" MKSTREAM
-   redis-cli XGROUP CREATE orders.intent order_processors "$" MKSTREAM
-   ```
-
-3. **Use Pub/Sub Backend**:
-   ```bash
-   export BUS_BACKEND=pubsub
-   ```
-
-**Feature Comparison**:
-| Redis Version | Streams Support | Auto Recovery | Recommended |
-|---------------|----------------|---------------|-------------|
-| 6.2+ | ✅ Full | ✅ Yes | ✅ |
-| 6.0-6.1 | ⚠️ Limited | ❌ Manual | ⚠️ |
-| < 6.0 | ❌ No | ❌ No | ❌ |
-
-### TimeFrame Mapping Issues
-Supported timeframes for Alpaca API:
-- `1Min` - One minute bars
-- `5Min` - Five minute bars  
-- `1Hour` - One hour bars
-- `1Day` - Daily bars
 
 ### Port Conflicts
-The control system automatically handles port cleanup:
 ```bash
-🧹 Cleaning port 8000...
-🔫 Killing process 12345 (uvicorn) listening on port 8000
-✅ Killed 1 processes using port 8000
+# Automatic cleanup
+python scripts/control.py stop
+
+# Manual cleanup
+lsof -tiTCP:8001,8011,8012 -sTCP:LISTEN | xargs kill -9
 ```
 
-### Memory Optimization
-For resource-constrained environments:
-```bash
-# Limit Prometheus retention
---storage.tsdb.retention.time=1d
-
-# Use smaller Redis memory
-redis-server --maxmemory 100mb --maxmemory-policy allkeys-lru
-
-# Reduce simulation speed
-python apps/simulator/main.py --speed 0.1  # Very slow simulation
-```
+---
 
 ## 📚 API Reference
 
 ### REST Endpoints
 
-**System Monitoring:**
-- `GET /health` - System health check with message bus status
-- `GET /status` - Comprehensive system status including message bus statistics
+**System:**
+- `GET /health` - Health check
+- `GET /status` - System status
 - `GET /metrics` - Prometheus metrics
 
-**Trading Operations:**
-- `POST /signals/manual` - Create manual trading signal
-- `GET /signals/history` - Signal history with filtering
-- `GET /portfolio` - Current portfolio state
+**Trading:**
+- `POST /signals/manual` - Create signal
+- `GET /signals/history` - Signal history
+- `GET /portfolio` - Portfolio state
 - `GET /positions/{symbol}` - Position details
 
-**Backtest Management:**
-- `POST /backtest/jobs` - Create new backtest job
-- `GET /backtest/jobs` - List all backtest jobs
-- `GET /backtest/jobs/{job_id}` - Get specific job status
-- `POST /backtest/jobs/{job_id}/start` - Start queued job
-- `POST /backtest/jobs/{job_id}/cancel` - Cancel running job
-- `GET /backtest/jobs/{job_id}/results` - Get job results
-- `GET /backtest/jobs/{job_id}/download` - Download results as JSON
-- `POST /backtest/quick` - Quick backtest for testing
-- `GET /backtest/stats` - Backtest system statistics
+**Backtesting:**
+- `POST /backtest/jobs` - Create job
+- `GET /backtest/jobs` - List jobs
+- `GET /backtest/jobs/{id}` - Job status
+- `POST /backtest/jobs/{id}/start` - Start job
+- `POST /backtest/jobs/{id}/cancel` - Cancel job
+- `GET /backtest/jobs/{id}/results` - Results
+- `GET /backtest/jobs/{id}/download` - Download
+- `POST /backtest/quick` - Quick test
+- `GET /backtest/stats` - Statistics
 
-### WebSocket Endpoints
-- `WS /ws/dashboard` - Real-time dashboard updates
+### WebSocket
+- `WS /ws/dashboard` - Real-time updates
 
-### Message Bus Events
-The system publishes various event types through Redis:
-- `bars` - Market data bars
+### Message Bus Streams
+- `bars` - Market data
 - `signals` - Trading signals
-- `orders.intent` - Order intentions
-- `orders.fill` - Order execution results
-- `system` - System events and status updates
+- `orders.intent` - Order requests
+- `orders.fill` - Executions
+- `system` - System events
 
-**Consumer Groups:**
-- `signal_processors` - Processes trading signals (Risk Manager)
-- `order_processors` - Processes order intents (Executor)
-- `bar_processors` - Processes market data (Strategies)
-
-## 🔒 Security
-
-- **Local Binding**: All services bind to 127.0.0.1 by default
-- **Paper Trading**: System configured for paper trading only
-- **Credential Management**: Environment variable-based credential storage
-- **Process Isolation**: Individual service processes with controlled communication
-- **Safe Message Processing**: Messages acknowledged only after successful processing
-
-## 🔧 Recent Platform Changes
-
-### Standardized Metrics Architecture
-* **Unified metrics** in `lib/metrics_helpers.py` with global `CollectorRegistry` (`TRADING_REGISTRY`)
-* **Metrics sidecars** that re-export with **official Content-Type** for Prometheus:
-  `text/plain; version=0.0.4; charset=utf-8`
-* **Automated QA**:
-  * `streams_low_level_check.py` (Epic 1)
-  * `e2e_streams_pipeline.sh` + `metrics_smoke_strict.sh` (Epics 1+2)
-
-### Enhanced Redis Streams Implementation
-* **Safe consumer groups** with ACK-after-processing pattern
-* **Automatic message recovery** using `XAUTOCLAIM` (Redis 6.2+) or manual reclaim (Redis 6.0)
-* **System events architecture** for real-time configuration updates
-
-## ⚡ Quick Verification Commands
-
-```bash
-# 1) Cleanup
-pkill -f "apps/risk_manager/main.py" >/dev/null 2>&1 || true
-pkill -f "apps/executor/main.py"     >/dev/null 2>&1 || true
-pkill -f "scripts/qa/reexport_metrics.py" >/dev/null 2>&1 || true
-lsof -tiTCP:8011,8012,9911,9912 -sTCP:LISTEN 2>/dev/null | xargs -r kill -9
-
-# 2) Base environment (real Redis)
-export REDIS_URL="redis://localhost:6379/0"
-export BUS_BACKEND=streams
-unset FORCE_FAKE_REDIS FAKE_REDIS
-export USE_FAKE_REDIS=0
-
-# 3) Low-level Streams (Epic 1)
-python scripts/qa/streams_low_level_check.py
-
-# 4) E2E complete (Epics 1+2)
-bash scripts/qa/e2e_streams_pipeline.sh
-
-# 5) Strict sidecars smoke test (Epic 2)
-bash scripts/qa/metrics_smoke_strict.sh
-
-# 6) (Optional) Manual CT headers verification on sidecars
-curl -sI http://127.0.0.1:9911/metrics | tr -d '\r'
-curl -sI http://127.0.0.1:9912/metrics | tr -d '\r'
-```
+---
 
 ## 🏗️ Development
 
@@ -1132,69 +663,103 @@ curl -sI http://127.0.0.1:9912/metrics | tr -d '\r'
 ```
 algorithmic-trading-platform/
 ├── apps/                   # Microservices
-│   ├── api/               # REST API and monitoring
-│   ├── data_ingestor/     # Market data ingestion
+│   ├── api/               # REST API
+│   ├── data_ingestor/     # Market data
 │   ├── strategies/        # Trading strategies
 │   ├── risk_manager/      # Risk management
 │   ├── executor/          # Order execution
-│   └── simulator/         # Historical data simulation
+│   └── simulator/         # Historical sim
 ├── lib/                   # Shared libraries
-│   ├── models.py          # Pydantic data models
-│   ├── bus.py            # Redis message bus with fallbacks
-│   ├── settings.py       # Configuration management
-│   ├── time_utils.py     # Time utilities
-│   └── deduplication.py  # Idempotency service
-├── scripts/              # Management and testing scripts
-│   ├── control.py        # Service management
-│   ├── launcher.py       # Service launcher
-│   ├── sim_random.py     # Rapid backtesting tool
-│   └── setup.sh         # System setup
-├── data/                 # Data directory
-│   └── csv/             # CSV data files
-├── logs/                 # Service log files
-├── pids/                 # Process ID files
-├── configs/              # Configuration files
-└── requirements.txt      # Python dependencies
+│   ├── models.py          # Data models
+│   ├── bus.py            # Message bus
+│   ├── settings.py       # Configuration
+│   └── time_utils.py     # Time utilities
+├── scripts/              # Management scripts
+│   ├── control.py        # Service control
+│   ├── sim_random.py     # Backtester
+│   └── setup.sh         # Setup
+├── data/csv/             # CSV data files
+├── logs/                 # Service logs
+├── out/                  # Results
+└── configs/              # Configuration
 ```
 
 ### Adding New Strategies
-1. Create strategy class in `apps/strategies/`
-2. Implement `analyze()` method returning `Signal` objects
-3. Add strategy to configuration
-4. Test with simulator: `python apps/simulator/main.py --csv data/csv`
-5. Validate with rapid backtester: `python scripts/sim_random.py`
+1. Create class in `apps/strategies/`
+2. Implement `analyze()` returning `Signal` objects
+3. Add to configuration
+4. Test with simulator
+5. Validate with backtester
 
 ### Extending the API
-1. Add new endpoints to `apps/api/main.py`
+1. Add endpoints to `apps/api/main.py`
 2. Update API documentation
-3. Add corresponding tests
-4. Update Prometheus metrics if needed
-5. Test with `curl` commands
+3. Add tests
+4. Update metrics
 
-### Creating Custom Data Sources
-1. Implement data loader in simulator or backtester
-2. Follow CSV format: `timestamp,open,high,low,close,volume`
-3. Test with both tools to ensure compatibility
-4. Add configuration options if needed
+---
 
 ## 🤝 Contributing
 
 1. Fork the repository
 2. Create feature branch
-3. Implement changes with comprehensive testing
-4. Test with both simulator and backtester
-5. Ensure all health checks pass
+3. Implement with tests
+4. Test with simulator and backtester
+5. Ensure health checks pass
 6. Update documentation
 7. Submit pull request
 
+---
+
 ## 📞 Support
 
-For issues and questions:
-- Check service logs in `logs/` directory
-- Use `python scripts/control.py status` for system health
-- Monitor Prometheus metrics at http://127.0.0.1:9090
-- Review configuration in `configs/base.yaml`
-- Test individual components with simulator and backtester
-- Check Redis connectivity: `redis-cli ping`
+**Troubleshooting Steps:**
+1. Check logs in `logs/` directory
+2. Verify system status: `python scripts/control.py status`
+3. Monitor metrics: http://127.0.0.1:9090
+4. Review configuration: `configs/base.yaml`
+5. Test components individually
+6. Check Redis: `redis-cli ping`
 
-The platform provides a complete foundation for algorithmic trading with enterprise-grade reliability, monitoring, and risk management capabilities, along with comprehensive testing and simulation tools for strategy development and validation
+**Common Issues:**
+- Port conflicts → `python scripts/control.py stop`
+- Redis connection → Set `USE_FAKE_REDIS=1`
+- Alpaca API → Use CSV data fallback
+- Service startup → Check logs and dependencies
+
+---
+
+## 📄 License
+
+See LICENSE file for details.
+
+---
+
+## 🎯 Getting Started Checklist
+
+- [ ] Install Python 3.9+ and Redis 6.0+
+- [ ] Clone repository and install dependencies
+- [ ] Configure environment variables
+- [ ] Run infrastructure setup
+- [ ] Verify installation with smoke test
+- [ ] Run a quick backtest
+- [ ] Simulate historical data
+- [ ] Access monitoring dashboards
+- [ ] Review API documentation
+- [ ] Explore Grafana dashboards
+
+**Next Steps:**
+- Review [DEVELOPMENT_HISTORY.md](DEVELOPMENT_HISTORY.md) for implementation details
+- Check `configs/base.yaml` for trading parameters
+- Explore example backtests in `scripts/sim_random.py`
+- Monitor system health in Grafana
+
+---
+
+**Ready to trade?** Start with a quick backtest to verify your setup:
+
+```bash
+python scripts/sim_random.py --symbol AAPL --start 2023-01-01 --end 2023-12-31 --seed 42 --plot out/test.png
+```
+
+🚀 Happy trading!
