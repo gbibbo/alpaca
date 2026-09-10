@@ -112,9 +112,11 @@ class TestNoOvernightAndForcedClose:
         # Exactly one trade per session, each closed by the forced session-close flatten.
         assert len(acc["trades"]) == 2
         assert all(t["exit_reason"] == "session_close" for t in acc["trades"])
-        # The forced exit fills at each session's LAST bar (its close), never after.
-        last_ts = {(session_bounds(d)[1] - timedelta(minutes=1)).isoformat() for d in (DAY1, DAY2)}
-        assert {t["exit"] for t in acc["trades"]} == last_ts
+        # The forced exit is recorded at each session's CLOSE (last bar start + one bar).
+        close_ts = {session_bounds(d)[1].isoformat() for d in (DAY1, DAY2)}
+        assert {t["exit"] for t in acc["trades"]} == close_ts
+        # Held ~ full session (entered at open+5min, exited at close): holding > 6 hours.
+        assert all(t["holding_seconds"] > 6 * 3600 for t in acc["trades"])
         # BUY and SELL quantities net to flat.
         assert sum(f["quantity"] for f in acc["fills"] if f["side"] == "BUY") == \
                sum(f["quantity"] for f in acc["fills"] if f["side"] == "SELL")

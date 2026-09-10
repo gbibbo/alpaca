@@ -415,11 +415,16 @@ def run_intraday_account(name, ordered, config, strategy):
     def _open_trade(sym, price, ts):
         st[sym]["entry_ts"], st[sym]["entry_px"] = ts, float(price)
 
-    def _close_trade(sym, price, ts, reason):
+    def _close_trade(sym, price, ts, reason, exit_ts=None):
+        # exit_ts lets a forced session-close record the exit at the bar's CLOSE (bar start + one
+        # timeframe) rather than its start, so a position held for the final bar counts as one bar
+        # of holding instead of zero. Time-based exits fill at the next bar's OPEN, so they keep
+        # ts (the bar start) unchanged.
         s = st[sym]
+        xt = exit_ts if exit_ts is not None else ts
         if s["entry_ts"] is not None:
-            trades.append({"symbol": sym, "entry": s["entry_ts"].isoformat(), "exit": ts.isoformat(),
-                           "holding_seconds": (ts - s["entry_ts"]).total_seconds(),
+            trades.append({"symbol": sym, "entry": s["entry_ts"].isoformat(), "exit": xt.isoformat(),
+                           "holding_seconds": (xt - s["entry_ts"]).total_seconds(),
                            "entry_price": s["entry_px"], "exit_price": float(price), "exit_reason": reason})
         s["entry_ts"] = s["entry_px"] = s["entry_seq"] = s["hold"] = None
 
@@ -453,9 +458,11 @@ def run_intraday_account(name, ordered, config, strategy):
                     if int(ledger.positions.get(sym, D(0))) <= 0:
                         _close_trade(sym, px, ts, "time")
                 held = int(ledger.positions.get(sym, D(0)))
-            # (2) pending entry at THIS bar's open (only if flat and not the last bar of the session)
+            # (2) pending entry at THIS bar's open (only if flat and not the last bar of the
+            #     session, unless the strategy explicitly allows a one-bar last-bar hold)
+            allow_last = getattr(strategy, "allow_last_bar_entry", False)
             if s["pending"] is not None:
-                if held <= 0 and not is_last:
+                if held <= 0 and (not is_last or allow_last):
                     qty = min(s["pending"]["qty"], vol_cap)
                     if qty > 0:
                         px = _intraday_fill(ledger, name, sym, "BUY", qty, bar.open, config, ts)
@@ -467,7 +474,8 @@ def run_intraday_account(name, ordered, config, strategy):
             # (3) forced session-close flatten at THIS bar's CLOSE (no overnight; full size)
             if held > 0 and is_last and strategy.exit_at_session_close:
                 px = _intraday_fill(ledger, name, sym, "SELL", held, bar.close, config, ts)
-                _close_trade(sym, px, ts, "session_close")
+                _close_trade(sym, px, ts, "session_close",
+                             exit_ts=ts + timedelta(seconds=timeframe_seconds(strategy.timeframe)))
                 held = 0
             # (4) decision on this CLOSED, COMPLETE bar (flat, not the last bar)
             if getattr(bar, "is_complete", True) and held <= 0 and s["pending"] is None and not is_last:

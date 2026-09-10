@@ -51,6 +51,10 @@ class Strategy(ABC):
     intraday: bool = False             # True routes to run_intraday_account (RTH, no overnight)
     exit_at_session_close: bool = True # force-flatten at the session's last bar close
     max_holding_bars: Optional[int] = None  # default time-based exit when a signal omits hold_bars
+    allow_last_bar_entry: bool = False # if True, a pending entry may fill on the session's LAST
+                                       # bar (open) and be force-closed at that same bar's close --
+                                       # a legitimate one-bar hold (e.g. the Gao et al. last-half-hour
+                                       # position). Default False: never open a doomed last-bar entry.
 
     def __init__(self, **params):
         self.params = params
