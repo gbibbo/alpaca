@@ -11,6 +11,7 @@ Enhanced Executor with ChatGPT's recommended improvements
 
 import os
 import sys
+import errno
 import asyncio
 import logging
 import json
@@ -39,6 +40,22 @@ from lib.metrics_helpers import (
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide as AlpacaOrderSide, TimeInForce, OrderStatus as AlpacaOrderStatus
+try:
+    from alpaca.common.exceptions import APIError
+except Exception:  # pragma: no cover - keeps module importable if alpaca layout changes
+    APIError = Exception
+
+# Alpaca order statuses (lower-case) grouped by lifecycle stage
+OPEN_STATUSES = {"new", "accepted", "pending_new", "accepted_for_bidding", "held", "partially_filled",
+                 "pending_cancel", "pending_replace", "calculated", "stopped", "suspended", "done_for_day"}
+TERMINAL_STATUSES = {"filled", "canceled", "cancelled", "rejected", "expired", "replaced"}
+
+
+def order_status_str(order) -> str:
+    """Normalize an alpaca-py Order.status (Enum or str) to a lower-case string."""
+    status = getattr(order, "status", None)
+    status = getattr(status, "value", status)
+    return str(status).lower() if status is not None else ""
 
 # Configure logging
 logging.basicConfig(
@@ -183,32 +200,45 @@ class OrderTracker:
         order_data = self.orders_by_broker_id[broker_order_id]
         order_intent = order_data["intent"]
 
+        status = (status or "").lower()
+
+        # Alpaca reports filled_qty as a CUMULATIVE total. Only the delta since the last
+        # update is a new fill; repeated polls must not double-count.
+        new_fill_qty = Decimal('0')
+        if filled_qty is not None and filled_qty > 0 and fill_price:
+            new_fill_qty = Decimal(str(filled_qty)) - order_data["total_filled"]
+
         # Epic 5: Update FSM state
         fsm = self.order_fsms.get(broker_order_id)
         if fsm:
             from lib.order_fsm import map_alpaca_status_to_event
             event = map_alpaca_status_to_event(status)
 
-            if event:
-                fsm.transition(event, fill_quantity=filled_qty, fill_price=fill_price)
+            if event and fsm.is_terminal():
+                logger.debug(f"FSM for {broker_order_id} already terminal ({fsm.current_state}); ignoring '{status}'")
+            elif event:
+                if new_fill_qty > 0:
+                    fsm.transition(event, fill_quantity=new_fill_qty, fill_price=fill_price)
+                else:
+                    fsm.transition(event)
                 logger.debug(f"FSM updated for {broker_order_id}: {fsm.current_state}")
 
         order_data["status"] = status
         order_data["last_updated"] = MonotonicTimer.current()
-        
+
         # Handle fills
-        if filled_qty and filled_qty > 0 and fill_price:
+        if new_fill_qty > 0:
             fill_data = {
-                "quantity": filled_qty,
+                "quantity": new_fill_qty,
                 "price": fill_price,
                 "timestamp": TimeUtils.utc_now(),
-                "value": filled_qty * fill_price
+                "value": new_fill_qty * fill_price
             }
-            
+
             order_data["fills"].append(fill_data)
-            order_data["total_filled"] += filled_qty
+            order_data["total_filled"] += new_fill_qty
             order_data["remaining_quantity"] = order_intent.quantity - order_data["total_filled"]
-            
+
             # Create OrderFill object
             order_fill = OrderFill(
                 symbol=order_intent.symbol,
@@ -216,14 +246,14 @@ class OrderTracker:
                 side=order_intent.side,
                 quantity=order_intent.quantity,
                 fill_price=fill_price,
-                fill_quantity=filled_qty,
-                broker_order_id=broker_order_id,
+                fill_quantity=new_fill_qty,
+                broker_order_id=str(broker_order_id),
                 client_order_id=order_intent.client_order_id,
                 status=OrderStatus.PARTIALLY_FILLED if order_data["remaining_quantity"] > 0 else OrderStatus.FILLED,
                 commission=Decimal('0.0'),  # Alpaca is commission-free
                 total_value=fill_data["value"]
             )
-            
+
             # Update metrics
             if order_data["remaining_quantity"] <= 0:
                 self.orders_filled += 1
@@ -232,16 +262,19 @@ class OrderTracker:
                 logger.info(f"Order completely filled: {order_intent.client_order_id}")
             else:
                 self.orders_partial += 1
-                logger.info(f"Partial fill: {order_intent.client_order_id} - {filled_qty}/{order_intent.quantity}")
-            
+                logger.info(f"Partial fill: {order_intent.client_order_id} - {order_data['total_filled']}/{order_intent.quantity}")
+
             return order_fill
-        
-        # Handle failed/cancelled orders
-        if status in ['cancelled', 'rejected', 'expired']:
+
+        # Handle failed/cancelled orders (Alpaca spells it 'canceled')
+        if status in ('canceled', 'cancelled', 'rejected', 'expired', 'replaced'):
             self.orders_failed += 1
             self.pending_orders.pop(broker_order_id, None)
             logger.warning(f"Order {status}: {order_intent.client_order_id}")
-        
+        elif status == 'filled' and order_data["remaining_quantity"] <= 0:
+            # Already accounted for (repeated poll)
+            self.pending_orders.pop(broker_order_id, None)
+
         return None
     
     def get_pending_orders(self) -> List[str]:
@@ -315,7 +348,7 @@ class EnhancedAlpacaExecutor:
             start_metrics_server(metrics_port)
             logger.info(f"📊 Executor metrics available at http://localhost:{metrics_port}/metrics")
         except OSError as e:
-            if getattr(e, "errno", None) == 98:  # Address already in use
+            if getattr(e, "errno", None) in (errno.EADDRINUSE, 98, 10048):  # Address already in use (Linux/Windows)
                 try:
                     metrics_port = find_available_port(metrics_port + 1)
                     start_metrics_server(metrics_port)
@@ -333,6 +366,11 @@ class EnhancedAlpacaExecutor:
             "get_orders": RetryConfig(max_attempts=2, base_delay=0.5, max_delay=10.0),
             "cancel_order": RetryConfig(max_attempts=2, base_delay=1.0, max_delay=15.0)
         }
+
+        # How long to wait for the broker to report a fill right after submission before
+        # handing the order over to the background monitor (paper market orders fill in ~1s).
+        self.fill_confirm_seconds = float(os.getenv("EXECUTOR_FILL_CONFIRM_SECONDS", "5"))
+        self.fill_poll_interval = float(os.getenv("EXECUTOR_FILL_POLL_INTERVAL", "1"))
         
         # Initialize Alpaca trading client
         if not self.settings.has_alpaca_credentials:
@@ -392,9 +430,16 @@ class EnhancedAlpacaExecutor:
                 
             except Exception as e:
                 error_msg = str(e).lower()
-                
+                # alpaca-py APIError exposes the HTTP status; str(e) is only the JSON body
+                status_code = getattr(e, "status_code", None)
+                if not isinstance(status_code, int):
+                    status_code = None
+                is_rate_limit = status_code == 429 or "429" in error_msg or "rate limit" in error_msg
+                is_server_error = status_code is not None and 500 <= status_code < 600
+                is_client_error = status_code is not None and 400 <= status_code < 500 and not is_rate_limit
+
                 # Handle specific error types
-                if "429" in error_msg or "rate limit" in error_msg:
+                if is_rate_limit:
                     # Rate limit hit - wait longer
                     wait_time = retry_config.calculate_delay(attempt) * 2  # Double wait for rate limits
                     logger.warning(f"Rate limit error on attempt {attempt}/{retry_config.max_attempts} for {description}: {e}")
@@ -410,7 +455,7 @@ class EnhancedAlpacaExecutor:
                         # All retries failed
                         self.metrics.broker_429_retry(operation, success=False)
                 
-                elif "5" in error_msg[:1]:  # 5xx server errors
+                elif is_server_error:  # 5xx server errors
                     # Server error - retry with exponential backoff
                     wait_time = retry_config.calculate_delay(attempt)
                     logger.warning(f"Server error on attempt {attempt}/{retry_config.max_attempts} for {description}: {e}")
@@ -420,7 +465,7 @@ class EnhancedAlpacaExecutor:
                         await asyncio.sleep(wait_time)
                         continue
                 
-                elif "4" in error_msg[:1] and "429" not in error_msg:
+                elif is_client_error:
                     # 4xx client errors (except 429) - don't retry
                     logger.error(f"Client error for {description}: {e}")
                     self.rate_manager.failed_calls += 1
@@ -441,6 +486,94 @@ class EnhancedAlpacaExecutor:
                 self.rate_manager.failed_calls += 1
                 raise e
     
+    async def get_existing_order(self, client_order_id: str):
+        """Look up an order by client_order_id. Returns None when it does not exist (404)."""
+        try:
+            if not self.rate_manager.can_make_trading_call():
+                await asyncio.sleep(self.rate_manager.get_wait_time())
+            order = self.trading_client.get_order_by_client_id(client_order_id)
+            self.rate_manager.record_trading_call("get_order_by_client_id")
+            return order
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            msg = str(e).lower()
+            if status_code == 404 or "not found" in msg or "does not exist" in msg:
+                return None
+            if status_code == 429 or (isinstance(status_code, int) and status_code >= 500):
+                # Transient broker problem: use the retry path once
+                try:
+                    return await self._execute_with_retry(
+                        operation="get_orders",
+                        func=lambda: self.trading_client.get_order_by_client_id(client_order_id),
+                        description=f"Check existing order {client_order_id}"
+                    )
+                except Exception as retry_error:
+                    logger.warning(f"Error checking existing order (continuing with submit): {retry_error}")
+                    return None
+            logger.warning(f"Error checking existing order (continuing with submit): {e}")
+            return None
+
+    def is_intent_expired(self, order_intent: OrderIntent) -> bool:
+        """Intents carry a valid_until set by the risk manager; never act on stale redeliveries."""
+        if not order_intent.valid_until:
+            return False
+        valid_until = order_intent.valid_until
+        if valid_until.tzinfo is None:
+            valid_until = valid_until.replace(tzinfo=TimeUtils.utc_now().tzinfo)
+        return TimeUtils.utc_now() > valid_until
+
+    def _handle_expired_intent(self, order_intent: OrderIntent):
+        logger.warning(
+            f"Order intent expired (valid_until={order_intent.valid_until}), skipping: {order_intent.client_order_id}"
+        )
+        self.bus.publish_system_event(
+            event_type="order_intent_expired",
+            source="executor",
+            data={
+                "symbol": order_intent.symbol,
+                "side": order_intent.side,
+                "quantity": float(order_intent.quantity),
+                "client_order_id": order_intent.client_order_id,
+                "valid_until": order_intent.valid_until.isoformat() if order_intent.valid_until else None
+            }
+        )
+
+    async def confirm_fill(self, broker_id: str, order) -> Optional[OrderFill]:
+        """Poll the broker briefly after submission and report the REAL fill (price/qty).
+        Returns None if the order is still open; the background monitor takes over then."""
+        latest = order
+        deadline = MonotonicTimer.current() + self.fill_confirm_seconds
+        while True:
+            status = order_status_str(latest)
+            if status in TERMINAL_STATUSES or status == "partially_filled":
+                break
+            if status not in OPEN_STATUSES:
+                logger.debug(f"Unknown broker status '{status}' for {broker_id}; leaving to monitor")
+                return None
+            if MonotonicTimer.current() >= deadline:
+                logger.info(f"Order {broker_id} still '{status}' after {self.fill_confirm_seconds}s; monitor will track it")
+                return None
+            await asyncio.sleep(self.fill_poll_interval)
+            try:
+                latest = await self._execute_with_retry(
+                    operation="get_orders",
+                    func=lambda: self.trading_client.get_order_by_id(broker_id),
+                    description=f"Poll order {broker_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Could not poll order {broker_id}: {e}")
+                return None
+        return self.apply_broker_order_state(latest)
+
+    def apply_broker_order_state(self, alpaca_order) -> Optional[OrderFill]:
+        """Feed a broker order snapshot into the tracker; returns a new OrderFill if any."""
+        broker_id = str(alpaca_order.id)
+        status = order_status_str(alpaca_order)
+        filled_qty = Decimal(str(alpaca_order.filled_qty or 0))
+        fill_price = Decimal(str(alpaca_order.filled_avg_price)) if alpaca_order.filled_avg_price else None
+        logger.debug(f"Order update: {broker_id} status={status} filled_qty={filled_qty} avg_price={fill_price}")
+        return self.order_tracker.update_order_status(broker_id, status, filled_qty, fill_price)
+
     def convert_side(self, side: SignalSide) -> AlpacaOrderSide:
         """Convert our SignalSide to Alpaca OrderSide"""
         if side == SignalSide.BUY:
@@ -509,69 +642,31 @@ class EnhancedAlpacaExecutor:
                         return None
 
                 # Epic 4: Check if order already exists by client_order_id (idempotency)
-                try:
-                    existing_order = await self._execute_with_retry(
-                        operation="get_order_by_client_id",
-                        func=lambda: self.trading_client.get_order_by_client_order_id(
-                            order_intent.client_order_id
-                        ),
-                        description=f"Check existing order {order_intent.client_order_id}"
+                existing_order = await self.get_existing_order(order_intent.client_order_id)
+                if existing_order:
+                    existing_id = str(existing_order.id)
+                    existing_status = order_status_str(existing_order)
+                    logger.warning(f"💡 Order already exists (idempotency): {order_intent.client_order_id} -> {existing_id}")
+
+                    # Record duplicate blocked metric
+                    self.metrics.duplicate_order_blocked(
+                        symbol=order_intent.symbol,
+                        client_order_id=order_intent.client_order_id
                     )
 
-                    if existing_order:
-                        logger.warning(f"💡 Order already exists (idempotency): {order_intent.client_order_id} -> {existing_order.id}")
+                    # Track it (if not already tracked) and report any fill the broker has for it
+                    if existing_id not in self.order_tracker.orders_by_broker_id:
+                        self.order_tracker.add_pending_order(order_intent, existing_id)
 
-                        # Record duplicate blocked metric
-                        self.metrics.duplicate_order_blocked(
-                            symbol=order_intent.symbol,
-                            client_order_id=order_intent.client_order_id
-                        )
+                    if existing_status in ('filled', 'partially_filled'):
+                        order_fill = self.apply_broker_order_state(existing_order)
+                        if order_fill:
+                            logger.info(f"✅ Existing order already filled: {order_intent.client_order_id}")
+                            return order_fill
 
-                        # Add to order tracker with existing broker ID
-                        self.order_tracker.add_pending_order(order_intent, existing_order.id)
-
-                        # If already filled, create OrderFill and return
-                        if existing_order.status in ['filled', 'partially_filled']:
-                            fill_price = Decimal(str(existing_order.filled_avg_price or existing_order.limit_price or 0))
-                            filled_qty = Decimal(str(existing_order.filled_qty or 0))
-
-                            if filled_qty > 0:
-                                order_fill = OrderFill(
-                                    symbol=order_intent.symbol,
-                                    timestamp=TimeUtils.utc_now(),
-                                    side=order_intent.side,
-                                    quantity=order_intent.quantity,
-                                    fill_price=fill_price,
-                                    fill_quantity=filled_qty,
-                                    broker_order_id=existing_order.id,
-                                    client_order_id=order_intent.client_order_id,
-                                    status=OrderStatus.FILLED if existing_order.status == 'filled' else OrderStatus.PARTIALLY_FILLED,
-                                    commission=Decimal('0.0'),
-                                    total_value=fill_price * filled_qty
-                                )
-
-                                # Update order tracker
-                                self.order_tracker.update_order_status(
-                                    existing_order.id,
-                                    existing_order.status,
-                                    filled_qty,
-                                    fill_price
-                                )
-
-                                logger.info(f"✅ Existing order already filled: {order_intent.client_order_id}")
-                                return order_fill
-
-                        # Order exists but not filled yet
-                        logger.info(f"Order exists in state: {existing_order.status}")
-                        return None
-
-                except Exception as e:
-                    error_str = str(e).lower()
-                    if "not found" in error_str or "does not exist" in error_str:
-                        logger.debug(f"No existing order found for client_order_id: {order_intent.client_order_id} (proceeding with submit)")
-                    else:
-                        logger.warning(f"Error checking existing order: {e}")
-                        # Continue with submit anyway
+                    # Order exists but not filled yet (or fill already reported)
+                    logger.info(f"Order exists in state: {existing_status}")
+                    return None
 
                 # Convert order side
                 alpaca_side = self.convert_side(order_intent.side)
@@ -611,12 +706,13 @@ class EnhancedAlpacaExecutor:
                     description=f"Order submission for {order_intent.symbol}"
                 )
 
-                # Add to order tracker
-                self.order_tracker.add_pending_order(order_intent, order_response.id)
+                # Add to order tracker (broker ids are UUIDs in alpaca-py; our models want str)
+                broker_id = str(order_response.id)
+                self.order_tracker.add_pending_order(order_intent, broker_id)
 
                 logger.info(f"✅ Order submitted successfully:")
-                logger.info(f"  Alpaca Order ID: {order_response.id}")
-                logger.info(f"  Status: {order_response.status}")
+                logger.info(f"  Alpaca Order ID: {broker_id}")
+                logger.info(f"  Status: {order_status_str(order_response)}")
                 logger.info(f"  Symbol: {order_response.symbol}")
                 logger.info(f"  Quantity: {order_response.qty}")
                 logger.info(f"  Side: {order_response.side}")
@@ -625,37 +721,12 @@ class EnhancedAlpacaExecutor:
                 self.successful_executions += 1
                 self.total_volume += Decimal(str(order_intent.quantity)) * Decimal(str(order_intent.price or 0))
 
-                # For market orders, create immediate fill (Alpaca paper trading fills instantly)
-                if order_intent.order_type == OrderType.MARKET:
-                    fill_price = Decimal(str(order_intent.price or order_response.limit_price or 0))
-
-                    order_fill = OrderFill(
-                        symbol=order_intent.symbol,
-                        timestamp=TimeUtils.utc_now(),
-                        side=order_intent.side,
-                        quantity=order_intent.quantity,
-                        fill_price=fill_price,
-                        fill_quantity=order_intent.quantity,
-                        broker_order_id=order_response.id,
-                        client_order_id=order_intent.client_order_id,
-                        status=OrderStatus.FILLED,
-                        commission=Decimal('0.0'),
-                        total_value=fill_price * order_intent.quantity
-                    )
-
-                    # Update order tracker
-                    self.order_tracker.update_order_status(
-                        order_response.id,
-                        "filled",
-                        order_intent.quantity,
-                        fill_price
-                    )
-
-                    logger.info(f"Market order filled: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
-
-                    return order_fill
-
-                return None
+                # Report the REAL fill from the broker (never fabricate one at the signal price).
+                # If it has not filled within fill_confirm_seconds, monitor_pending_orders takes over.
+                order_fill = await self.confirm_fill(broker_id, order_response)
+                if order_fill:
+                    logger.info(f"Order filled: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
+                return order_fill
 
             except Exception as e:
                 self.failed_executions += 1
@@ -721,27 +792,23 @@ class EnhancedAlpacaExecutor:
                     except Exception as e:
                         logger.error(f"Failed to cancel timed out order {broker_id}: {e}")
 
-                # Monitor pending orders
+                # Monitor pending orders. get_orders() without a filter only returns OPEN
+                # orders, so filled ones would never show up; fetch each pending id directly.
                 pending_orders = self.order_tracker.get_pending_orders()
 
                 if pending_orders:
                     logger.debug(f"Monitoring {len(pending_orders)} pending orders")
 
-                    # Get orders from Alpaca with retry logic
-                    try:
-                        orders = await self._execute_with_retry(
-                            operation="get_orders",
-                            func=lambda: self.trading_client.get_orders(),
-                            description="Get orders status"
-                        )
-
-                        for order in orders:
-                            if order.id in pending_orders:
-                                await self._process_order_update(order)
-
-                    except Exception as e:
-                        logger.error(f"Error fetching order status: {e}")
-                        await asyncio.sleep(10)  # Wait before retrying
+                    for broker_id in list(pending_orders):
+                        try:
+                            order = await self._execute_with_retry(
+                                operation="get_orders",
+                                func=lambda bid=broker_id: self.trading_client.get_order_by_id(bid),
+                                description=f"Get order status {broker_id}"
+                            )
+                            await self._process_order_update(order)
+                        except Exception as e:
+                            logger.error(f"Error fetching order status for {broker_id}: {e}")
 
                 await asyncio.sleep(15)  # Check every 15 seconds
 
@@ -752,18 +819,8 @@ class EnhancedAlpacaExecutor:
     async def _process_order_update(self, alpaca_order):
         """Process order status update from Alpaca"""
         try:
-            broker_id = alpaca_order.id
-            status = alpaca_order.status.value.lower()
-            
-            # Check for fills
-            filled_qty = Decimal(str(alpaca_order.filled_qty or 0))
-            fill_price = Decimal(str(alpaca_order.filled_avg_price or 0)) if alpaca_order.filled_avg_price else None
-            
-            logger.debug(f"Order update: {broker_id} status={status} filled_qty={filled_qty}")
-            
-            # Update order tracker
-            order_fill = self.order_tracker.update_order_status(broker_id, status, filled_qty, fill_price)
-            
+            order_fill = self.apply_broker_order_state(alpaca_order)
+
             if order_fill:
                 # Mark fill as processed to prevent duplicates
                 if self.deduplication.mark_fill_processed(order_fill):
@@ -825,19 +882,27 @@ class EnhancedAlpacaExecutor:
 
                     logger.info(f"Received order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
 
-                    # Check for duplicate processing
-                    if self.deduplication.is_order_processed(order_intent):
-                        logger.debug(f"Order intent already processed: {order_intent.client_order_id}")
+                    # Check for duplicate processing (executor-side key; the risk manager's
+                    # dedup:order key is set before publishing and must not be consulted here)
+                    if self.deduplication.is_order_executed(order_intent):
+                        logger.debug(f"Order intent already executed: {order_intent.client_order_id}")
                         return True  # ACK duplicate orders
+
+                    if self.is_intent_expired(order_intent):
+                        self._handle_expired_intent(order_intent)
+                        return True  # ACK stale intents, never submit them
 
                     # Execute order
                     order_fill = await self.execute_order_with_validation(order_intent)
+                    self.deduplication.mark_order_executed(
+                        order_intent, order_fill.broker_order_id if order_fill else None
+                    )
 
                     if order_fill:
                         # Mark fill as processed and publish
                         if self.deduplication.mark_fill_processed(order_fill):
                             self.bus.publish_order_fill(order_fill)
-                            logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.quantity}@${order_fill.fill_price:.2f}")
+                            logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
                         else:
                             logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
 
@@ -862,19 +927,26 @@ class EnhancedAlpacaExecutor:
                 try:
                     logger.info(f"Received order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol} @ ${order_intent.price or 'MARKET'}")
 
-                    # Check for duplicate processing
-                    if self.deduplication.is_order_processed(order_intent):
-                        logger.debug(f"Order intent already processed: {order_intent.client_order_id}")
+                    # Check for duplicate processing (executor-side key)
+                    if self.deduplication.is_order_executed(order_intent):
+                        logger.debug(f"Order intent already executed: {order_intent.client_order_id}")
+                        continue
+
+                    if self.is_intent_expired(order_intent):
+                        self._handle_expired_intent(order_intent)
                         continue
 
                     # Execute order
                     order_fill = await self.execute_order_with_validation(order_intent)
+                    self.deduplication.mark_order_executed(
+                        order_intent, order_fill.broker_order_id if order_fill else None
+                    )
 
                     if order_fill:
                         # Mark fill as processed and publish
                         if self.deduplication.mark_fill_processed(order_fill):
                             self.bus.publish_order_fill(order_fill)
-                            logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.quantity}@${order_fill.fill_price:.2f}")
+                            logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
                         else:
                             logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
 
@@ -984,18 +1056,20 @@ class EnhancedAlpacaExecutor:
         logger.info(f"  Success Rate: {final_stats['performance']['success_rate']:.1%}")
         logger.info(f"  Total Volume: ${final_stats['performance']['total_volume']:,.2f}")
         
-        # Cancel pending orders if configured to do so
+        # Cancel only the orders THIS executor submitted and still tracks as open.
+        # (cancel_orders() would wipe every open order in the account, including manual ones.)
         pending_orders = self.order_tracker.get_pending_orders()
         if pending_orders:
             logger.info(f"Canceling {len(pending_orders)} pending orders...")
-            try:
-                await self._execute_with_retry(
-                    operation="cancel_orders",
-                    func=lambda: self.trading_client.cancel_orders(),
-                    description="Cancel all orders"
-                )
-            except Exception as e:
-                logger.error(f"Error canceling orders: {e}")
+            for broker_id in list(pending_orders):
+                try:
+                    await self._execute_with_retry(
+                        operation="cancel_order",
+                        func=lambda bid=broker_id: self.trading_client.cancel_order_by_id(bid),
+                        description=f"Cancel pending order {broker_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error canceling order {broker_id}: {e}")
         
         # Publish service stop event
         if self.bus:

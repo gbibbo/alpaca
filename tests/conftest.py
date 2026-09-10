@@ -6,9 +6,11 @@ BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8001").rstrip("/")
 def base_url():
     return BASE_URL
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def _wait_api_ready(base_url):
-    """Espera que la API responda /health; si no, salta tests de API."""
+    """Espera que la API responda /health; si no, salta los tests que la usan.
+    NO es autouse: antes saltaba la suite entera cuando la API no estaba levantada.
+    Los modulos que necesitan la API declaran pytestmark = pytest.mark.usefixtures("_wait_api_ready")."""
     deadline = time.time() + 20
     last_err = None
     while time.time() < deadline:

@@ -8,6 +8,10 @@ import requests
 import json
 import time
 from datetime import datetime, timedelta
+import pytest
+
+# These tests need the API running on BASE_URL; skip them (only them) when it is down
+pytestmark = pytest.mark.usefixtures("_wait_api_ready")
 
 # API base URL
 BASE_URL = "http://localhost:8001"

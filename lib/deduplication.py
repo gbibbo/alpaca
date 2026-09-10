@@ -40,7 +40,8 @@ class DeduplicationService:
         
         # Redis key prefixes
         self.signal_prefix = "dedup:signal:"
-        self.order_prefix = "dedup:order:"
+        self.order_prefix = "dedup:order:"          # written by risk_manager when an intent is published
+        self.executed_prefix = "dedup:executed:"    # written by executor once an intent has been acted on
         self.fill_prefix = "dedup:fill:"
         self.stats_key = "dedup:stats"
         
@@ -256,6 +257,39 @@ class DeduplicationService:
             logger.error(f"Failed to mark order in Redis: {key}")
             return False
     
+    def _executed_key(self, order: OrderIntent) -> str:
+        return f"{self.executed_prefix}{order.intent_id or order.client_order_id}"
+
+    def is_order_executed(self, order: OrderIntent) -> bool:
+        """Executor-side check: has this intent already been submitted/handled by an executor?
+        Deliberately separate from is_order_processed(), which the risk manager sets *before*
+        publishing (sharing that key made the executor drop every intent as a duplicate)."""
+        key = self._executed_key(order)
+        cache_result = self._check_cache_first(key, self._order_cache, self.order_ttl)
+        if cache_result is not None:
+            return cache_result
+        redis_result = self._check_redis(key)
+        if redis_result:
+            self._order_cache[key] = MonotonicTimer.current()
+        return redis_result
+
+    def mark_order_executed(self, order: OrderIntent, broker_order_id: str = None) -> bool:
+        """Mark intent as handled by the executor. Returns True if newly marked."""
+        key = self._executed_key(order)
+        if self.is_order_executed(order):
+            return False
+        self._order_cache[key] = MonotonicTimer.current()
+        data = {
+            "client_order_id": order.client_order_id,
+            "symbol": order.symbol,
+            "broker_order_id": broker_order_id,
+            "executed_at": TimeUtils.utc_now().isoformat(),
+        }
+        if self._set_redis_with_ttl(key, data, self.order_ttl):
+            return True
+        self._order_cache.pop(key, None)
+        return False
+
     def is_fill_processed(self, fill: OrderFill) -> bool:
         """Check if fill has already been processed"""
         key = self._generate_fill_key(fill)

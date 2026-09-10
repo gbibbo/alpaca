@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 
 # Configuration management
 def _get_bus_config():
-    """Get current bus configuration from environment"""
+    """Get current bus configuration: process env wins, then .env via settings"""
+    settings = get_settings()
     return {
-        "backend": os.getenv("BUS_BACKEND", "pubsub").lower(),  # Default to pubsub for compatibility
+        "backend": os.getenv("BUS_BACKEND", settings.bus_backend).lower(),
         "use_fake": bool(int(os.getenv("USE_FAKE_REDIS", "0")))
     }
 
@@ -52,8 +53,18 @@ def _connect_redis():
         logger.info(f"Connected to real Redis: {settings.redis_url}")
         return r
     except Exception as e:
+        allow_fallback = settings.allow_fake_redis_fallback or bool(int(os.getenv("ALLOW_FAKE_REDIS_FALLBACK", "0")))
+        if not allow_fallback:
+            # A silent fallback gives every service its own private in-memory "bus":
+            # everything looks healthy but no message ever crosses process boundaries.
+            logger.error(f"Cannot connect to Redis at {settings.redis_url}: {e}")
+            raise ConnectionError(
+                f"Redis unavailable at {settings.redis_url} ({e}). Start Redis, or set "
+                f"USE_FAKE_REDIS=1 (single-process tests) / ALLOW_FAKE_REDIS_FALLBACK=1 to allow an in-memory fallback."
+            ) from e
+
         logger.warning(f"Real Redis connection failed: {e}")
-        logger.info("Falling back to fakeredis for testing")
+        logger.warning("Falling back to fakeredis (ALLOW_FAKE_REDIS_FALLBACK=1) - messages will NOT cross processes")
 
         try:
             import fakeredis
@@ -194,7 +205,12 @@ class PubSubBus:
             channels = [
                 "system.service_start", "system.service_stop", "system.service_error",
                 "system.signal_generated", "system.signal_rejected", "system.signal_approved",
-                "system.historical_data_complete", "system.order_error", "system.emergency_stop"
+                "system.signal_processing_error", "system.historical_data_complete",
+                "system.order_error", "system.order_filled", "system.order_timeout",
+                "system.order_validation_failed", "system.order_execution_failed",
+                "system.order_intent_expired", "system.emergency_stop",
+                "system.emergency_stop_activated", "system.emergency_stop_deactivated",
+                "system.strategy_config"
             ]
         else:
             channels = [f"system.{event_type}"]
@@ -322,8 +338,8 @@ class MessageBus:
     def __init__(self, redis_client=None, force_backend=None):
         self.redis_client = redis_client or _connect_redis()
 
-        # Store Redis connection details for Streams backend
-        self.redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
+        # Store Redis connection details for Streams backend (same source of truth as pubsub client)
+        self.redis_url = os.getenv("REDIS_URL", get_settings().redis_url)
         self.redis_db = int(os.getenv("REDIS_DB", "0"))
 
         # Determine backend

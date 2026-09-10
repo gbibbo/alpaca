@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # Redis/Message Bus Configuration
     redis_url: str = "redis://localhost:6379/0"
     use_fake_redis: bool = False
+    bus_backend: str = "pubsub"  # "streams" (recommended, durable) or "pubsub" (fire-and-forget)
+    allow_fake_redis_fallback: bool = False  # If True, silently use an in-process fakeredis when Redis is down
     
     # API Configuration
     api_host: str = "0.0.0.0"

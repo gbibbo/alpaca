@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
 """
 apps/strategies/main.py
-Trading Strategies - Fixed version with unified configuration
-Consumes market bars and generates trading signals
+Strategy engine: routes bars to strategies by (symbol, timeframe) and publishes signals.
+
+Strategies themselves live in apps/strategies/library.py (see lib/strategy_base.py for the
+contract). The engine keeps one bar history per (symbol, timeframe) so 1m, 5m, 1h and 1d bars
+travelling on the same bus never mix.
 """
 
 import os
+import errno
 import asyncio
 import logging
 import sys
 import json
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple
 from collections import defaultdict, deque
 from pathlib import Path
 
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from lib.models import Bar, Signal, SignalSide
+from lib.models import Bar, Signal, TimeFrame
 from lib.bus import get_bus, connect_bus
 from lib.settings import get_settings
+from lib.strategy_base import Strategy, create_strategies
 from lib.metrics_helpers import (
     StrategyMetrics, start_metrics_server, find_available_port,
     time_bus_processing
+)
+
+# Backwards-compatible re-exports (tests and scripts import these from here)
+from apps.strategies.library import (  # noqa: F401
+    TechnicalIndicators, Random50Strategy, SmartTechnicalStrategy,
+    IntradayMomentum5m, HourlyTrendStrategy, DailyTrendStrategy,
 )
 
 # Configure logging
@@ -35,227 +44,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class TechnicalIndicators:
-    """Technical analysis indicators"""
-    
-    @staticmethod
-    def sma(prices: List[float], period: int) -> Optional[float]:
-        """Simple Moving Average"""
-        if len(prices) < period:
-            return None
-        return sum(prices[-period:]) / period
-    
-    @staticmethod
-    def rsi(prices: List[float], period: int = 14) -> Optional[float]:
-        """Relative Strength Index"""
-        if len(prices) < period + 1:
-            return None
-        
-        deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-        gains = [d if d > 0 else 0 for d in deltas[-period:]]
-        losses = [-d if d < 0 else 0 for d in deltas[-period:]]
-        
-        avg_gain = sum(gains) / period
-        avg_loss = sum(losses) / period
-        
-        if avg_loss == 0:
-            return 100
-        
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
-    
-    @staticmethod
-    def macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple:
-        """MACD indicator"""
-        if len(prices) < slow:
-            return None, None, None
-        
-        # Calculate EMAs
-        def ema(data, period):
-            if len(data) < period:
-                return [None] * len(data)
-            
-            alpha = 2 / (period + 1)
-            ema_values = [None] * (period - 1)
-            ema_values.append(sum(data[:period]) / period)
-            
-            for i in range(period, len(data)):
-                ema_values.append(alpha * data[i] + (1 - alpha) * ema_values[-1])
-            
-            return ema_values
-        
-        ema_fast = ema(prices, fast)
-        ema_slow = ema(prices, slow)
-        
-        if ema_fast[-1] is None or ema_slow[-1] is None:
-            return None, None, None
-        
-        macd_line = ema_fast[-1] - ema_slow[-1]
-        
-        # For simplicity, return basic MACD without signal line calculation
-        return macd_line, 0, macd_line
-
-class Random50Strategy:
-    """Random 50/50 strategy for infrastructure testing"""
-
-    def __init__(self, seed: Optional[int] = 42):
-        self.name = "random_50_50"
-        self.rng = np.random.default_rng(seed)  # Use numpy RNG for better control
-        self.seed = seed
-        logger.info(f"Random50Strategy initialized with seed: {seed}")
-    
-    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
-        """Generate random BUY/SELL signals"""
-        if len(bars) < 10:  # Need some bars before signaling
-            return None
-        
-        latest_bar = bars[-1]
-        
-        # Random decision
-        if self.rng.random() > 0.95:  # 5% chance of signal per bar
-            side = SignalSide.BUY if self.rng.random() > 0.5 else SignalSide.SELL
-            confidence = self.rng.uniform(0.4, 0.8)
-            
-            return Signal(
-                symbol=symbol,
-                timestamp=datetime.utcnow(),
-                side=side,
-                confidence=confidence,
-                price=latest_bar.close,
-                source=self.name,
-                metadata={
-                    "strategy_type": "random",
-                    "bar_count": len(bars),
-                    "latest_price": latest_bar.close
-                }
-            )
-
-        return None
-
-    def set_seed(self, seed: int):
-        """Update the random seed for reproducible results"""
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)
-        logger.info(f"Random50Strategy seed updated to: {seed}")
-
-class SmartTechnicalStrategy:
-    """Technical analysis strategy using multiple indicators"""
-    
-    def __init__(self):
-        self.name = "smart_technical"
-        self.min_bars = 50  # Minimum bars needed for analysis
-    
-    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
-        """Analyze bars and generate technical signals"""
-        if len(bars) < self.min_bars:
-            return None
-        
-        # Get closing prices
-        closes = [bar.close for bar in bars]
-        latest_bar = bars[-1]
-        
-        # Calculate indicators
-        sma_20 = TechnicalIndicators.sma(closes, 20)
-        sma_50 = TechnicalIndicators.sma(closes, 50)
-        rsi = TechnicalIndicators.rsi(closes, 14)
-        macd, _, _ = TechnicalIndicators.macd(closes)
-        
-        if None in [sma_20, sma_50, rsi]:
-            return None
-        
-        current_price = latest_bar.close
-        
-        # Scoring system
-        buy_signals = 0
-        sell_signals = 0
-        
-        # Trend analysis
-        if current_price > sma_20 > sma_50:
-            buy_signals += 1
-        elif current_price < sma_20 < sma_50:
-            sell_signals += 1
-        
-        # RSI analysis
-        if rsi < 30:  # Oversold
-            buy_signals += 1
-        elif rsi > 70:  # Overbought
-            sell_signals += 1
-        
-        # MACD analysis
-        if macd and macd > 0:
-            buy_signals += 1
-        elif macd and macd < 0:
-            sell_signals += 1
-        
-        # Volatility check (avoid signals during high volatility)
-        recent_prices = closes[-20:]
-        volatility = np.std(recent_prices) / np.mean(recent_prices)
-        
-        if volatility > 0.05:  # High volatility, reduce confidence
-            confidence_multiplier = 0.5
-        else:
-            confidence_multiplier = 1.0
-        
-        # Generate signal
-        if buy_signals >= 2:
-            confidence = min(0.9, (buy_signals / 3) * 0.8 * confidence_multiplier)
-            
-            return Signal(
-                symbol=symbol,
-                timestamp=datetime.utcnow(),
-                side=SignalSide.BUY,
-                confidence=confidence,
-                price=current_price,
-                source=self.name,
-                metadata={
-                    "buy_signals": buy_signals,
-                    "sell_signals": sell_signals,
-                    "sma_20": sma_20,
-                    "sma_50": sma_50,
-                    "rsi": rsi,
-                    "macd": macd,
-                    "volatility": volatility,
-                    "bar_count": len(bars)
-                }
-            )
-        
-        elif sell_signals >= 2:
-            confidence = min(0.9, (sell_signals / 3) * 0.8 * confidence_multiplier)
-            
-            return Signal(
-                symbol=symbol,
-                timestamp=datetime.utcnow(),
-                side=SignalSide.SELL,
-                confidence=confidence,
-                price=current_price,
-                source=self.name,
-                metadata={
-                    "buy_signals": buy_signals,
-                    "sell_signals": sell_signals,
-                    "sma_20": sma_20,
-                    "sma_50": sma_50,
-                    "rsi": rsi,
-                    "macd": macd,
-                    "volatility": volatility,
-                    "bar_count": len(bars)
-                }
-            )
-        
-        return None
 
 class StrategyEngine:
-    """Main strategy engine that manages multiple strategies"""
-    
-    def __init__(self):
+    """Main strategy engine that manages multiple strategies across timeframes"""
+
+    def __init__(self, strategies: Optional[List[Strategy]] = None):
         self.settings = get_settings()
         self.bus = get_bus()
         self.running = False
-        
-        # Initialize strategies
-        self.strategies = [
-            Random50Strategy(),
-            SmartTechnicalStrategy()
-        ]
+
+        # Strategies: explicit list, else ENABLED_STRATEGIES env (comma list), else all registered
+        if strategies is None:
+            enabled = [s for s in os.getenv("ENABLED_STRATEGIES", "").split(",") if s.strip()]
+            strategies = create_strategies(enabled)
+        self.strategies: List[Strategy] = strategies
+
+        # Bars older than this only warm up indicators (no live signals from historical backfill).
+        # 0 disables the check (required for historical replays through the simulator).
+        self.max_bar_age_seconds = int(os.getenv("STRATEGY_MAX_BAR_AGE_SECONDS", "0"))
 
         # Initialize metrics for each strategy
         self.strategy_metrics = {}
@@ -268,7 +74,7 @@ class StrategyEngine:
             start_metrics_server(metrics_port)
             logger.info(f"📊 Strategies metrics available at http://localhost:{metrics_port}/metrics")
         except OSError as e:
-            if getattr(e, "errno", None) == 98:  # Address already in use
+            if getattr(e, "errno", None) in (errno.EADDRINUSE, 98, 10048):  # Address already in use (Linux/Windows)
                 try:
                     metrics_port = find_available_port(metrics_port + 1)
                     start_metrics_server(metrics_port)
@@ -280,82 +86,114 @@ class StrategyEngine:
         except Exception as e:
             logger.warning(f"Failed to start metrics server: {e}")
 
-        # Bar storage for each symbol
-        self.bar_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
-        
-        # Track signals to avoid spam
-        self.last_signal_time: Dict[str, datetime] = {}
-        self.signal_cooldown = timedelta(minutes=5)
-        
-        logger.info(f"Initialized strategy engine with {len(self.strategies)} strategies")
+        # Bar storage per (symbol, timeframe); depth = largest max_history among strategies on that timeframe
+        self._history_depth: Dict[TimeFrame, int] = defaultdict(lambda: 200)
+        for s in self.strategies:
+            self._history_depth[s.timeframe] = max(self._history_depth[s.timeframe], s.max_history, s.lookback_bars)
+        self.bar_history: Dict[Tuple[str, TimeFrame], deque] = {}
+
+        # Cooldown keyed on BAR time (event time) so it works identically live and in replays
+        self.last_signal_bar_time: Dict[Tuple[str, str], datetime] = {}
+
+        # Counters
+        self.bars_seen: Dict[TimeFrame, int] = defaultdict(int)
+        self.signals_published = 0
+
+        logger.info(f"Initialized strategy engine with {len(self.strategies)} strategies:")
+        for s in self.strategies:
+            logger.info(f"  - {s.name:22} tf={s.timeframe.value:3} lookback={s.lookback_bars:4} "
+                        f"cooldown={s.cooldown_seconds}s expiry={s.signal_expiry_seconds}s")
         logger.info(f"Tracking symbols: {self.settings.symbols_list}")
-    
-    def should_generate_signal(self, symbol: str, strategy_name: str) -> bool:
-        """Check if enough time has passed since last signal"""
-        key = f"{symbol}_{strategy_name}"
-        last_time = self.last_signal_time.get(key)
-        
-        if last_time is None:
+        if self.max_bar_age_seconds:
+            logger.info(f"Live guard: bars older than {self.max_bar_age_seconds}s do not generate signals")
+
+    # ------------------------------------------------------------ helpers
+    def _history(self, symbol: str, timeframe: TimeFrame) -> deque:
+        key = (symbol, timeframe)
+        if key not in self.bar_history:
+            self.bar_history[key] = deque(maxlen=self._history_depth[timeframe])
+        return self.bar_history[key]
+
+    def should_generate_signal(self, symbol: str, strategy: Strategy, bar_time: datetime) -> bool:
+        """Per (symbol, strategy) cooldown measured in bar time."""
+        key = (symbol, strategy.name)
+        last = self.last_signal_bar_time.get(key)
+        if last is None:
             return True
-        
-        return datetime.utcnow() - last_time > self.signal_cooldown
-    
-    def process_bar(self, bar: Bar):
-        """Process incoming bar and generate signals"""
+        return (bar_time - last) >= timedelta(seconds=strategy.cooldown_seconds)
+
+    def get_strategies_for(self, timeframe: TimeFrame) -> List[Strategy]:
+        return [s for s in self.strategies if s.timeframe == timeframe]
+
+    # ------------------------------------------------------------ core
+    def process_bar(self, bar: Bar) -> int:
+        """Process incoming bar and generate signals. Returns number of signals published."""
+        published = 0
         try:
-            # Store bar
-            self.bar_history[bar.symbol].append(bar)
-            bars = list(self.bar_history[bar.symbol])
-            
-            logger.debug(f"Processing bar for {bar.symbol}: ${bar.close:.2f} (total bars: {len(bars)})")
-            
-            # Run strategies
-            for strategy in self.strategies:
+            history = self._history(bar.symbol, bar.timeframe)
+            if history and bar.timestamp <= history[-1].timestamp:
+                logger.debug(f"Ignoring duplicate/out-of-order {bar.timeframe.value} bar for {bar.symbol} @ {bar.timestamp}")
+                return 0
+            history.append(bar)
+            self.bars_seen[bar.timeframe] += 1
+            bars = list(history)
+
+            logger.debug(f"{bar.symbol} {bar.timeframe.value} bar ${bar.close:.2f} (history: {len(bars)})")
+
+            # Stale bars (historical backfill on restart) only warm up indicators
+            if self.max_bar_age_seconds > 0:
+                age = (datetime.now(timezone.utc) - bar.timestamp).total_seconds()
+                if age > self.max_bar_age_seconds:
+                    return 0
+
+            for strategy in self.get_strategies_for(bar.timeframe):
                 try:
-                    if not self.should_generate_signal(bar.symbol, strategy.name):
+                    if not strategy.applies_to(bar.symbol):
                         continue
-                    
+                    if len(bars) < strategy.lookback_bars:
+                        continue
+                    if not self.should_generate_signal(bar.symbol, strategy, bar.timestamp):
+                        continue
+
                     signal = strategy.analyze(bar.symbol, bars)
-                    
-                    if signal and signal.confidence > 0.5:  # Minimum confidence threshold
-                        # Update last signal time
-                        key = f"{bar.symbol}_{strategy.name}"
-                        self.last_signal_time[key] = datetime.utcnow()
-                        
-                        # Record signal generation metrics
-                        if strategy.name in self.strategy_metrics:
-                            self.strategy_metrics[strategy.name].signal_generated(
-                                symbol=signal.symbol,
-                                side=signal.side.value,
-                                source=strategy.name
-                            )
+                    if signal is None or float(signal.confidence) < strategy.min_confidence:
+                        continue
 
-                        # Publish signal
-                        self.bus.publish_signal(signal)
+                    self.last_signal_bar_time[(bar.symbol, strategy.name)] = bar.timestamp
 
-                        logger.info(
-                            f"Generated signal: {signal.side} {signal.symbol} "
-                            f"(confidence: {signal.confidence:.2%}) from {strategy.name}"
+                    if strategy.name in self.strategy_metrics:
+                        self.strategy_metrics[strategy.name].signal_generated(
+                            symbol=signal.symbol, side=signal.side.value, source=strategy.name
                         )
-                        
-                        # Publish strategy event
-                        self.bus.publish_system_event(
-                            event_type="signal_generated",
-                            source="strategies",
-                            data={
-                                "symbol": signal.symbol,
-                                "side": signal.side,
-                                "confidence": signal.confidence,
-                                "strategy": strategy.name,
-                                "metadata": signal.metadata
-                            }
-                        )
-                
+
+                    self.bus.publish_signal(signal)
+                    published += 1
+                    self.signals_published += 1
+
+                    logger.info(
+                        f"Generated signal: {signal.side.value} {signal.symbol} "
+                        f"(confidence: {float(signal.confidence):.0%}, tf: {bar.timeframe.value}) from {strategy.name}"
+                    )
+
+                    self.bus.publish_system_event(
+                        event_type="signal_generated",
+                        source="strategies",
+                        data={
+                            "symbol": signal.symbol,
+                            "side": signal.side.value,
+                            "confidence": float(signal.confidence),
+                            "strategy": strategy.name,
+                            "timeframe": bar.timeframe.value,
+                            "metadata": signal.metadata
+                        }
+                    )
+
                 except Exception as e:
                     logger.error(f"Error in strategy {strategy.name} for {bar.symbol}: {e}")
-        
+
         except Exception as e:
             logger.error(f"Error processing bar for {bar.symbol}: {e}")
+        return published
 
     def handle_strategy_config(self, event_data: dict):
         """Handle strategy configuration events (e.g., seed updates)"""
@@ -365,11 +203,19 @@ class StrategyEngine:
                 if seed is not None:
                     logger.info(f"Updating strategy seeds to: {seed}")
                     for strategy in self.strategies:
-                        if hasattr(strategy, 'set_seed'):
-                            strategy.set_seed(seed)
+                        strategy.set_seed(seed)
         except Exception as e:
             logger.error(f"Error handling strategy config: {e}")
-    
+
+    def get_stats(self) -> dict:
+        return {
+            "strategies": [s.describe() for s in self.strategies],
+            "bars_seen": {tf.value: n for tf, n in self.bars_seen.items()},
+            "signals_published": self.signals_published,
+            "histories": {f"{sym}:{tf.value}": len(h) for (sym, tf), h in self.bar_history.items()},
+        }
+
+    # ------------------------------------------------------------ consumption
     async def consume_bars(self):
         """Consume bars from message bus with Streams-optimized processing"""
         logger.info("Starting to consume market bars...")
@@ -396,7 +242,7 @@ class StrategyEngine:
                     bar = Bar.model_validate(bar_data)
 
                     # Process the bar
-                    self.process_bar(bar)
+                    signals_generated += self.process_bar(bar)
                     bars_processed += 1
 
                     # Log progress periodically
@@ -429,7 +275,7 @@ class StrategyEngine:
                     break
 
                 try:
-                    self.process_bar(bar)
+                    signals_generated += self.process_bar(bar)
                     bars_processed += 1
 
                     # Log progress periodically
@@ -462,7 +308,7 @@ class StrategyEngine:
     async def start(self):
         """Start the strategy engine"""
         logger.info("Starting Strategy Engine...")
-        
+
         # Connect to message bus
         if not connect_bus():
             logger.error("Failed to connect to message bus")
@@ -477,26 +323,26 @@ class StrategyEngine:
             event_type="service_start",
             source="strategies",
             data={
-                "strategies": [s.name for s in self.strategies],
+                "strategies": [s.describe() for s in self.strategies],
                 "symbols": self.settings.symbols_list,
                 "paper_trading": self.settings.is_paper_trading
             }
         )
-        
+
         self.running = True
-        
+
         try:
             # Start consuming strategy configuration events in background
             asyncio.create_task(self.consume_strategy_events())
 
             # Start consuming bars
             await self.consume_bars()
-            
+
         except KeyboardInterrupt:
             logger.info("Received shutdown signal")
         except Exception as e:
             logger.error(f"Fatal error: {e}")
-            
+
             # Publish error event
             self.bus.publish_system_event(
                 event_type="service_error",
@@ -505,33 +351,35 @@ class StrategyEngine:
             )
         finally:
             await self.stop()
-    
+
     async def stop(self):
         """Stop the strategy engine"""
         logger.info("Stopping strategy engine...")
         self.running = False
-        
+
         # Publish service stop event
         if self.bus:
             self.bus.publish_system_event(
                 event_type="service_stop",
                 source="strategies",
-                data={"reason": "graceful_shutdown"}
+                data={"reason": "graceful_shutdown", "stats": self.get_stats()}
             )
             self.bus.disconnect()
+
 
 async def main():
     """Main entry point"""
     try:
         engine = StrategyEngine()
         await engine.start()
-        
+
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
     except Exception as e:
         logger.error(f"Unhandled error: {e}")
         import traceback
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

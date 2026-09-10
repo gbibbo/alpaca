@@ -25,8 +25,9 @@ from lib.models import Bar, TimeFrame
 from lib.bus import connect_bus, get_bus
 from lib.settings import get_settings
 from lib.time_utils import TimeUtils
+from lib.timeframes import parse_timeframe, to_alpaca_timeframe
 from lib.metrics_helpers import (
-    ServiceMetrics, start_metrics_server, BusMetrics,
+    ServiceMetrics, start_metrics_server, BusMetrics, find_available_port,
     Counter, TRADING_REGISTRY
 )
 
@@ -94,33 +95,10 @@ class AlpacaDataLoader:
             
             logger.info(f"Loading {symbol} data from {start_dt} to {end_dt} (timeframe: {timeframe}, feed: {feed})")
             
-            # FIXED: Correct Alpaca TimeFrame mapping
-            ATF = self.AlpacaTimeFrame  # alias
-            tf_in = timeframe
-            
-            try:
-                if tf_in == "1Min":
-                    alpaca_tf = ATF.Minute
-                elif tf_in == "5Min":
-                    # TimeFrame with minute multiples (new API)
-                    alpaca_tf = ATF(5, ATF.Unit.Minute)
-                elif tf_in == "1Hour":
-                    alpaca_tf = ATF.Hour
-                elif tf_in == "1Day":
-                    alpaca_tf = ATF.Day
-                else:
-                    # fallback for other formats
-                    if tf_in.endswith("Min"):
-                        n = int(tf_in[:-3])
-                        alpaca_tf = ATF(n, ATF.Unit.Minute)
-                    elif tf_in.endswith("Hour"):
-                        n = int(tf_in[:-4]) if tf_in[:-4].isdigit() else 1
-                        alpaca_tf = ATF(n, ATF.Unit.Hour)
-                    else:
-                        alpaca_tf = ATF.Day
-            except Exception as e:
-                logger.error(f"Unsupported timeframe '{tf_in}': {e}")
-                alpaca_tf = ATF.Day
+            # One mapping for both the Alpaca request and our internal Bar.timeframe label
+            # (previously '1Hour' was requested correctly but labelled DAY internally).
+            internal_tf = parse_timeframe(timeframe)
+            alpaca_tf = to_alpaca_timeframe(internal_tf)
             
             # Create request with corrected timeframe
             request = self.StockBarsRequest(
@@ -145,9 +123,6 @@ class AlpacaDataLoader:
             df = response.df.reset_index()
             
             for _, row in df.iterrows():
-                # Determine internal timeframe for our Bar model
-                internal_tf = TimeFrame.MINUTE if 'Min' in timeframe else TimeFrame.DAY
-                
                 bar = Bar(
                     symbol=symbol,
                     timestamp=row['timestamp'].to_pydatetime(),
@@ -167,9 +142,10 @@ class AlpacaDataLoader:
             logger.error(f"Error loading data for {symbol}: {e}")
             return []
     
-    def load_from_csv(self, csv_path: str, symbol: str) -> List[Bar]:
-        """Load historical data from CSV file"""
+    def load_from_csv(self, csv_path: str, symbol: str, timeframe: str = "1Min") -> List[Bar]:
+        """Load historical data from CSV file; `timeframe` labels the bars (1Min, 5Min, 1Hour, 1Day)"""
         bars = []
+        internal_tf = parse_timeframe(timeframe)
         
         try:
             with open(csv_path, 'r') as f:
@@ -202,7 +178,7 @@ class AlpacaDataLoader:
                         low=Decimal(str(row['low'])),
                         close=Decimal(str(row['close'])),
                         volume=int(float(row.get('volume', 0))),
-                        timeframe=TimeFrame.MINUTE
+                        timeframe=internal_tf
                     )
                     bars.append(bar)
             
@@ -532,7 +508,7 @@ async def main():
             for symbol in symbols:
                 csv_file = csv_dir / f"{symbol}.csv"
                 if csv_file.exists():
-                    bars = simulator.data_loader.load_from_csv(str(csv_file), symbol)
+                    bars = simulator.data_loader.load_from_csv(str(csv_file), symbol, args.timeframe)
                     symbol_data[symbol] = bars
                 else:
                     logger.warning(f"CSV file not found for {symbol}: {csv_file}")

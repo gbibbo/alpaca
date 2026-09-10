@@ -63,22 +63,36 @@ VALID_TRANSITIONS = {
         OrderEvent.SUBMIT: OrderState.SUBMITTED,
         OrderEvent.REJECT: OrderState.REJECTED
     },
+    # Market orders (especially in paper trading) can go straight from SUBMITTED to
+    # FILLED/PARTIALLY_FILLED/CANCELED without an intermediate ACCEPTED poll, so those
+    # events must be valid here too.
     OrderState.SUBMITTED: {
         OrderEvent.ACCEPT: OrderState.ACCEPTED,
+        OrderEvent.PARTIAL_FILL: OrderState.PARTIALLY_FILLED,
+        OrderEvent.FILL: OrderState.FILLED,
+        OrderEvent.CANCEL: OrderState.CANCELED,
         OrderEvent.REJECT: OrderState.REJECTED,
-        OrderEvent.TIMEOUT: OrderState.EXPIRED
+        OrderEvent.EXPIRE: OrderState.EXPIRED,
+        OrderEvent.TIMEOUT: OrderState.EXPIRED,
+        OrderEvent.SUSPEND: OrderState.SUSPENDED
     },
     OrderState.PENDING_NEW: {
         OrderEvent.ACCEPT: OrderState.ACCEPTED,
+        OrderEvent.PARTIAL_FILL: OrderState.PARTIALLY_FILLED,
+        OrderEvent.FILL: OrderState.FILLED,
+        OrderEvent.CANCEL: OrderState.CANCELED,
         OrderEvent.REJECT: OrderState.REJECTED,
+        OrderEvent.EXPIRE: OrderState.EXPIRED,
         OrderEvent.TIMEOUT: OrderState.EXPIRED
     },
     OrderState.ACCEPTED: {
+        OrderEvent.ACCEPT: OrderState.ACCEPTED,  # Repeated 'new/accepted' polls are a no-op
         OrderEvent.PARTIAL_FILL: OrderState.PARTIALLY_FILLED,
         OrderEvent.FILL: OrderState.FILLED,
         OrderEvent.CANCEL: OrderState.PENDING_CANCEL,
         OrderEvent.REPLACE: OrderState.PENDING_REPLACE,
         OrderEvent.REJECT: OrderState.REJECTED,
+        OrderEvent.EXPIRE: OrderState.EXPIRED,
         OrderEvent.TIMEOUT: OrderState.EXPIRED,
         OrderEvent.SUSPEND: OrderState.SUSPENDED
     },
@@ -86,6 +100,7 @@ VALID_TRANSITIONS = {
         OrderEvent.FILL: OrderState.FILLED,
         OrderEvent.PARTIAL_FILL: OrderState.PARTIALLY_FILLED,  # More partial fills
         OrderEvent.CANCEL: OrderState.CANCELED,
+        OrderEvent.EXPIRE: OrderState.EXPIRED,
         OrderEvent.TIMEOUT: OrderState.EXPIRED,
         OrderEvent.SUSPEND: OrderState.SUSPENDED
     },
@@ -367,6 +382,7 @@ def map_alpaca_status_to_event(alpaca_status: str) -> Optional[OrderEvent]:
         "partially_filled": OrderEvent.PARTIAL_FILL,
         "filled": OrderEvent.FILL,
         "canceled": OrderEvent.CANCEL,
+        "cancelled": OrderEvent.CANCEL,
         "rejected": OrderEvent.REJECT,
         "expired": OrderEvent.EXPIRE,
         "suspended": OrderEvent.SUSPEND,

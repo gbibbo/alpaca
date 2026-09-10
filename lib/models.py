@@ -10,12 +10,32 @@ from datetime import datetime, timezone
 from typing import Optional, Literal, Any, Generic, TypeVar
 from enum import Enum
 from uuid import UUID, uuid4
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import re
 
 # --- Helper functions for default values ---
 def get_utc_now():
     return datetime.now(timezone.utc)
+
+def ensure_utc(v):
+    """Coerce naive datetimes to UTC so aware/naive comparisons never blow up downstream."""
+    if isinstance(v, datetime) and v.tzinfo is None:
+        return v.replace(tzinfo=timezone.utc)
+    return v
+
+def quantize_input(v, places: int):
+    """Round float/str/Decimal inputs to `places` decimals before Decimal validation.
+    Strategies produce raw floats (e.g. 0.53333...) which would otherwise fail decimal_places checks."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float, str, Decimal)):
+        try:
+            d = v if isinstance(v, Decimal) else Decimal(str(v))
+            if d.is_finite():
+                return d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+        except Exception:
+            return v
+    return v
 
 def generate_uuid():
     return uuid4()
@@ -80,7 +100,17 @@ class Bar(BaseModel):
     close: Decimal = Field(gt=0, decimal_places=4)
     volume: int = Field(ge=0)
     timeframe: TimeFrame = TimeFrame.MINUTE
-    
+
+    @field_validator('open', 'high', 'low', 'close', mode='before')
+    @classmethod
+    def quantize_prices(cls, v):
+        return quantize_input(v, 4)
+
+    @field_validator('timestamp', mode='after')
+    @classmethod
+    def timestamp_utc(cls, v):
+        return ensure_utc(v)
+
     @field_validator('symbol')
     @classmethod
     def validate_symbol(cls, v: str) -> str:
@@ -88,7 +118,7 @@ class Bar(BaseModel):
         if not re.match(r'^[A-Z0-9.]+$', v.upper()):
             raise ValueError('Symbol must contain only letters, numbers, and dots')
         return v.upper()
-    
+
     @field_validator('high', 'low', 'close')
     @classmethod
     def validate_ohlc_relationship(cls, v, info):
@@ -117,8 +147,29 @@ class Signal(BaseModel):
     price: Optional[Decimal] = Field(gt=0, decimal_places=4, default=None)
     expire_seconds: int = Field(gt=0, default=300)  # 5 minutes default
     source: str = Field(min_length=1, max_length=50)
+    timeframe: TimeFrame = TimeFrame.MINUTE  # bar timeframe the strategy looked at
     metadata: dict[str, Any] = Field(default_factory=dict)
-    
+
+    @field_validator('confidence', mode='before')
+    @classmethod
+    def quantize_confidence(cls, v):
+        return quantize_input(v, 3)
+
+    @field_validator('price', mode='before')
+    @classmethod
+    def quantize_price(cls, v):
+        return quantize_input(v, 4)
+
+    @field_validator('quantity', mode='before')
+    @classmethod
+    def quantize_quantity(cls, v):
+        return quantize_input(v, 6)
+
+    @field_validator('timestamp', mode='after')
+    @classmethod
+    def timestamp_utc(cls, v):
+        return ensure_utc(v)
+
     @field_validator('symbol')
     @classmethod
     def validate_symbol(cls, v: str) -> str:
@@ -152,12 +203,22 @@ class OrderIntent(BaseModel):
     risk_adjusted: bool = False
     max_slippage_bps: Optional[int] = Field(ge=0, le=1000, default=None)  # Basis points
     valid_until: Optional[datetime] = None
-    
+
+    @field_validator('timestamp', 'valid_until', mode='after')
+    @classmethod
+    def timestamps_utc(cls, v):
+        return ensure_utc(v)
+
+    @field_validator('price', 'stop_loss', 'take_profit', mode='before')
+    @classmethod
+    def quantize_prices(cls, v):
+        return quantize_input(v, 4)
+
     @field_validator('symbol')
     @classmethod
     def validate_symbol(cls, v: str) -> str:
         return v.upper()
-    
+
     @field_validator('client_order_id')
     @classmethod
     def validate_client_order_id(cls, v: str) -> str:
@@ -209,12 +270,22 @@ class OrderFill(BaseModel):
     commission: Decimal = Field(ge=0, decimal_places=4, default=Decimal('0.0'))
     total_value: Decimal = Field(gt=0, decimal_places=4)
     slippage_bps: Optional[int] = Field(ge=0, default=None)  # Actual slippage in basis points
-    
+
+    @field_validator('timestamp', mode='after')
+    @classmethod
+    def timestamp_utc(cls, v):
+        return ensure_utc(v)
+
+    @field_validator('fill_price', 'commission', 'total_value', mode='before')
+    @classmethod
+    def quantize_money(cls, v):
+        return quantize_input(v, 4)
+
     @field_validator('symbol')
     @classmethod
     def validate_symbol(cls, v: str) -> str:
         return v.upper()
-    
+
     @field_validator('fill_quantity')
     @classmethod
     def validate_fill_quantity(cls, v, info):

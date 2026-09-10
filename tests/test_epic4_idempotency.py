@@ -100,7 +100,7 @@ class TestDuplicateOrderDetection:
             filled_qty=0
         )
 
-        mock_trading_client.get_order_by_client_order_id = Mock(
+        mock_trading_client.get_order_by_client_id = Mock(
             side_effect=[
                 Exception("Order not found"),  # First check: not found
                 mock_existing_order  # Second check: found
@@ -157,7 +157,7 @@ class TestRetryWith429:
             portfolio_value=100000
         ))
 
-        mock_trading_client.get_order_by_client_order_id = Mock(
+        mock_trading_client.get_order_by_client_id = Mock(
             side_effect=Exception("Order not found")
         )
 

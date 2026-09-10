@@ -46,6 +46,18 @@ class MarketCalendar:
         "2025-09-01": "Labor Day",
         "2025-11-27": "Thanksgiving Day",
         "2025-12-25": "Christmas Day",
+
+        # 2026
+        "2026-01-01": "New Year's Day",
+        "2026-01-19": "Martin Luther King Jr. Day",
+        "2026-02-16": "Presidents' Day",
+        "2026-04-03": "Good Friday",
+        "2026-05-25": "Memorial Day",
+        "2026-06-19": "Juneteenth",
+        "2026-07-03": "Independence Day (observed)",
+        "2026-09-07": "Labor Day",
+        "2026-11-26": "Thanksgiving Day",
+        "2026-12-25": "Christmas Day",
     }
 
     # Early close days (1:00 PM ET close)
@@ -57,10 +69,12 @@ class MarketCalendar:
         # Black Friday (day after Thanksgiving)
         "2024-11-29": "Black Friday",
         "2025-11-28": "Black Friday",
+        "2026-11-27": "Black Friday",
 
         # Christmas Eve (if weekday)
         "2024-12-24": "Christmas Eve",
         "2025-12-24": "Christmas Eve",
+        "2026-12-24": "Christmas Eve",
     }
 
     def __init__(self, timezone: str = "US/Eastern"):

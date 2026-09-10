@@ -508,28 +508,35 @@ class TestDecimalPrecision:
     """Test high-precision decimal handling"""
 
     def test_price_many_decimals(self):
-        """Test price validation enforces max 4 decimal places"""
-        # Model enforces max 4 decimal places
-        with pytest.raises(ValidationError):
-            Signal(
-                timestamp=datetime.now(timezone.utc),
-                symbol="GOOGL",
-                side=SignalSide.BUY,
-                price=Decimal("100.123456789"),
-                confidence=0.8,
-                source="test"
-            )
+        """Price inputs are rounded to 4 decimal places (strategies emit raw floats)"""
+        signal = Signal(
+            timestamp=datetime.now(timezone.utc),
+            symbol="GOOGL",
+            side=SignalSide.BUY,
+            price=Decimal("100.123456789"),
+            confidence=0.8,
+            source="test"
+        )
+        assert signal.price == Decimal("100.1235")
 
     def test_confidence_high_precision(self):
-        """Test confidence validation enforces max 3 decimal places"""
-        # Model enforces max 3 decimal places for confidence
+        """Confidence inputs are rounded to 3 decimal places and still bounded to [0, 1]"""
+        signal = Signal(
+            timestamp=datetime.now(timezone.utc),
+            symbol="GOOGL",
+            side=SignalSide.BUY,
+            price=Decimal("100.00"),
+            confidence=0.999999999,
+            source="test"
+        )
+        assert signal.confidence == Decimal("1.000")
         with pytest.raises(ValidationError):
             Signal(
                 timestamp=datetime.now(timezone.utc),
                 symbol="GOOGL",
                 side=SignalSide.BUY,
                 price=Decimal("100.00"),
-                confidence=0.999999999,
+                confidence=1.2,
                 source="test"
             )
 

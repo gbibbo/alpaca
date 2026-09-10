@@ -31,7 +31,10 @@ class RedisStreamsBus:
     def __init__(self, redis_url: str = None, db: int = 0, group_start_id="0"):
         import redis
 
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
+        if redis_url is None:
+            from lib.settings import get_settings
+            redis_url = os.getenv("REDIS_URL", get_settings().redis_url)
+        self.redis_url = redis_url
         self.db = db
         self.redis_client = None
         self.group_start_id = group_start_id

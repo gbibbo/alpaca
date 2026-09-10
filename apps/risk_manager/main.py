@@ -12,10 +12,11 @@ Enhanced Risk Manager with ChatGPT's recommended improvements
 
 import os
 import sys
+import errno
 import asyncio
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from pathlib import Path
@@ -23,9 +24,11 @@ from pathlib import Path
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from decimal import ROUND_DOWN
 from lib.models import Signal, OrderIntent, SignalSide, OrderType
 from lib.bus import get_bus, connect_bus
 from lib.settings import get_settings
+from lib.strategy_base import registered_names
 from lib.time_utils import (
     TimeUtils, MonotonicTimer, RateLimitWindow, TimingContext,
     ORDER_RATE_LIMITER, SIGNAL_RATE_LIMITER, check_alpaca_rate_limit,
@@ -51,11 +54,15 @@ logger = logging.getLogger(__name__)
 class CircuitBreaker:
     """Circuit breaker for emergency stops and error rate monitoring"""
     
-    def __init__(self, name: str, error_threshold: int = 5, time_window: int = 300):
+    def __init__(self, name: str, error_threshold: int = 5, time_window: int = 300,
+                 cooldown_seconds: Optional[int] = None):
         self.name = name
         self.error_threshold = error_threshold
         self.time_window = time_window  # 5 minutes default
-        
+        # After this long in the open state the breaker auto-closes (half-open) so that a
+        # transient burst of errors cannot block trading until a manual restart.
+        self.cooldown_seconds = cooldown_seconds if cooldown_seconds is not None else time_window
+
         # Error tracking using monotonic time
         self.errors = []  # List of (monotonic_time, error_info)
         self.is_open = False
@@ -106,10 +113,15 @@ class CircuitBreaker:
         """Check if operations should be blocked"""
         if self.manual_override:
             return True, f"Manual override active"
-        
+
         if self.is_open:
+            # Half-open: once the cooldown has elapsed, let traffic through again.
+            if self.opened_at is not None and MonotonicTimer.since(self.opened_at) >= self.cooldown_seconds:
+                self.errors = []
+                self._close_circuit(f"Cooldown of {self.cooldown_seconds}s elapsed")
+                return False, "Circuit breaker closed (cooldown elapsed)"
             return True, f"Circuit breaker open - {len(self.errors)} errors in last {self.time_window}s"
-        
+
         return False, "Circuit breaker closed"
     
     def manual_open(self, reason: str = "Manual emergency stop"):
@@ -172,6 +184,15 @@ class EnhancedRiskManager:
                 logger.warning(f"Could not initialize Alpaca Clock API: {e}")
 
         self.market_validator = MarketHoursValidator(alpaca_client)
+        self.alpaca_client = alpaca_client
+        self._portfolio_value_cache: Optional[Decimal] = None
+        self._portfolio_value_cached_at: float = 0.0
+        self._positions_cache: Dict[str, Dict[str, Decimal]] = {}
+        self._positions_cached_at: float = 0.0
+
+        # Signal sources we accept: every registered strategy + manual API, or an explicit override
+        override = [s.strip().lower() for s in os.getenv("ALLOWED_SIGNAL_SOURCES", "").split(",") if s.strip()]
+        self.allowed_sources = set(override) if override else set(registered_names()) | {"manual_api"}
 
         # Initialize metrics
         self.metrics = RiskManagerMetrics()
@@ -182,7 +203,7 @@ class EnhancedRiskManager:
             start_metrics_server(metrics_port)
             logger.info(f"📊 Risk Manager metrics available at http://localhost:{metrics_port}/metrics")
         except OSError as e:
-            if getattr(e, "errno", None) == 98:  # Address already in use
+            if getattr(e, "errno", None) in (errno.EADDRINUSE, 98, 10048):  # Address already in use (Linux/Windows)
                 try:
                     metrics_port = find_available_port(metrics_port + 1)
                     start_metrics_server(metrics_port)
@@ -317,8 +338,11 @@ class EnhancedRiskManager:
             if signal.confidence < Decimal('0.5'):
                 return False, f"Confidence too low: {signal.confidence} < 0.5"
             
-            if hasattr(signal, 'expire_seconds') and signal.expire_seconds:
-                if signal.timestamp and TimeUtils.utc_now() > (signal.timestamp + timedelta(seconds=signal.expire_seconds)):
+            if hasattr(signal, 'expire_seconds') and signal.expire_seconds and signal.timestamp:
+                signal_ts = signal.timestamp
+                if signal_ts.tzinfo is None:
+                    signal_ts = signal_ts.replace(tzinfo=timezone.utc)
+                if TimeUtils.utc_now() > (signal_ts + timedelta(seconds=signal.expire_seconds)):
                     return False, "Signal expired"
             
             # 7. Symbol Validation
@@ -326,52 +350,117 @@ class EnhancedRiskManager:
                 return False, f"Symbol {signal.symbol} not in allowed list: {self.settings.symbols_list}"
             
             # 8. Source Validation
-            allowed_sources = ["random_50_50", "smart_technical", "manual_api"]
-            if signal.source not in allowed_sources:
-                return False, f"Unknown signal source: {signal.source}"
+            if signal.source not in self.allowed_sources:
+                return False, f"Unknown signal source: {signal.source} (allowed: {sorted(self.allowed_sources)})"
             
             # All validations passed
             return True, "Signal validation successful"
     
-    def calculate_position_size(self, signal: Signal, portfolio_value: Decimal = Decimal('100000')) -> Tuple[Decimal, str]:
-        """
-        Calculate appropriate position size based on risk management rules
-        Returns (quantity, reasoning)
-        """
+    def get_portfolio_value(self, max_age_seconds: int = 60) -> Decimal:
+        """Account equity from Alpaca (cached), falling back to a nominal 100k when unavailable."""
+        now = MonotonicTimer.current()
+        if self._portfolio_value_cache is not None and now - self._portfolio_value_cached_at < max_age_seconds:
+            return self._portfolio_value_cache
+        if self.alpaca_client is not None:
+            try:
+                account = self.alpaca_client.get_account()
+                equity = Decimal(str(account.equity or account.portfolio_value or 0))
+                if equity > 0:
+                    self._portfolio_value_cache = equity
+                    self._portfolio_value_cached_at = now
+                    return equity
+            except Exception as e:
+                logger.warning(f"Could not fetch account equity, using fallback: {e}")
+        return self._portfolio_value_cache or Decimal('100000')
+
+    def get_positions(self, max_age_seconds: int = 30) -> Dict[str, Dict[str, Decimal]]:
+        """Open positions from Alpaca as {symbol: {qty, market_value}} (cached)."""
+        now = MonotonicTimer.current()
+        if self._positions_cache and now - self._positions_cached_at < max_age_seconds:
+            return self._positions_cache
+        if self.alpaca_client is None:
+            return self._positions_cache
         try:
-            # Base calculation using confidence and risk percentage  
+            positions = {}
+            for p in self.alpaca_client.get_all_positions():
+                qty = Decimal(str(p.qty))
+                side = str(getattr(p, "side", "long")).lower()
+                if side.endswith("short"):
+                    qty = -abs(qty)
+                positions[str(p.symbol).upper()] = {
+                    "qty": qty,
+                    "market_value": Decimal(str(p.market_value or 0)),
+                }
+            self._positions_cache = positions
+            self._positions_cached_at = now
+        except Exception as e:
+            logger.warning(f"Could not fetch positions, using cached/empty: {e}")
+        return self._positions_cache
+
+    def calculate_position_size(self, signal: Signal, portfolio_value: Optional[Decimal] = None,
+                                positions: Optional[Dict[str, Dict[str, Decimal]]] = None) -> Tuple[Decimal, str]:
+        """
+        Decide HOW MUCH to trade from live portfolio state.
+        - BUY: risk_pct * equity scaled by confidence, capped so that the symbol's total exposure
+          never exceeds max_position_size of equity (existing holdings count).
+        - SELL: never more than the shares actually held (no accidental shorting).
+        Returns (quantity, reasoning); quantity 0 means "do not trade".
+        """
+        if portfolio_value is None:
+            portfolio_value = self.get_portfolio_value()
+        if positions is None:
+            positions = self.get_positions()
+        try:
+            price = Decimal(str(signal.price)) if signal.price and signal.price > 0 else None
+            held = positions.get(signal.symbol.upper(), {})
+            held_qty = held.get("qty", Decimal('0'))
+            held_value = held.get("market_value")
+            if held_value is None:
+                held_value = held_qty * price if price else Decimal('0')
+
+            max_position_value = portfolio_value * Decimal(str(self.settings.max_position_size))
+
+            if signal.side == SignalSide.SELL:
+                if held_qty <= 0:
+                    return Decimal('0'), f"No long position in {signal.symbol} to sell (held: {held_qty})"
+                # Sell the whole position (exit signal); strategies can later request partial exits via metadata
+                quantity = held_qty
+                reasoning = f"Exit: selling {quantity} of {held_qty} held (${held_value:.2f})"
+                return quantity.quantize(Decimal('1'), rounding=ROUND_DOWN), reasoning
+
+            # BUY
             base_risk_amount = portfolio_value * Decimal(str(self.settings.risk_pct))
             confidence_adjusted_risk = base_risk_amount * signal.confidence
-            
-            # Position size limits
-            max_position_value = portfolio_value * Decimal(str(self.settings.max_position_size))
-            position_value = min(confidence_adjusted_risk, max_position_value)
-            
-            # Calculate quantity (assuming we have signal price)
-            if signal.price and signal.price > 0:
-                quantity = position_value / Decimal(str(signal.price))
-                quantity = quantity.quantize(Decimal('1'))  # Round to whole shares
-            else:
-                # Fallback: use default small position
-                quantity = Decimal('10')
-            
-            # Ensure minimum viable position
-            if quantity < Decimal('1'):
-                quantity = Decimal('1')
-            
-            reasoning = f"Risk: ${confidence_adjusted_risk:.2f}, Max pos: ${max_position_value:.2f}, Price: ${signal.price or 0:.2f}"
-            
+            room = max_position_value - held_value
+            if room <= 0:
+                return Decimal('0'), (f"Position limit reached for {signal.symbol}: holding ${held_value:.2f} "
+                                      f"of max ${max_position_value:.2f} ({float(self.settings.max_position_size):.0%} of equity)")
+            position_value = min(confidence_adjusted_risk, room)
+
+            if price is None:
+                return Decimal('0'), "Signal has no price; cannot size position"
+
+            quantity = (position_value / price).quantize(Decimal('1'), rounding=ROUND_DOWN)
+            if quantity < 1:
+                return Decimal('0'), (f"Sized to ${position_value:.2f} at ${price:.2f} = less than 1 share")
+
+            reasoning = (f"Risk budget ${confidence_adjusted_risk:.2f}, room ${room:.2f} "
+                         f"(held ${held_value:.2f} / max ${max_position_value:.2f}), price ${price:.2f} -> {quantity} shares")
             return quantity, reasoning
-            
+
         except Exception as e:
             logger.error(f"Position sizing error: {e}")
-            return Decimal('1'), f"Error in calculation, using minimum: {e}"
+            return Decimal('0'), f"Error in calculation: {e}"
     
-    def create_order_intent(self, signal: Signal) -> OrderIntent:
-        """Create order intent from validated signal"""
-        # Calculate position size
-        quantity, size_reasoning = self.calculate_position_size(signal)
-        
+    def create_order_intent(self, signal: Signal, quantity: Optional[Decimal] = None) -> OrderIntent:
+        """Create order intent from validated signal (quantity from calculate_position_size unless given)"""
+        if quantity is None:
+            quantity, size_reasoning = self.calculate_position_size(signal)
+            if quantity <= 0:
+                raise ValueError(f"Position sizing yielded no trade: {size_reasoning}")
+        else:
+            size_reasoning = "quantity supplied by caller"
+
         # Generate unique client order ID with risk manager prefix
         client_order_id = f"risk_{signal.source}_{signal.symbol}_{signal.signal_id.hex[:8]}"
         
@@ -426,12 +515,33 @@ class EnhancedRiskManager:
                     }
                 )
 
-                # Record rejection in circuit breaker if it's a validation error
-                if "validation" in reason.lower():
-                    self.circuit_breakers["risk_validation"].record_error(reason)
-
+                # NOTE: a rejected signal is a normal outcome, not a fault. Feeding rejections
+                # into the circuit breaker made "Circuit breaker ..." rejections re-trip the
+                # breaker forever. Only genuine processing exceptions (below) count as errors.
                 return
-            
+
+            # Order rate limit: check BEFORE marking the signal processed, otherwise the
+            # signal is silently lost (it can never be re-evaluated once marked).
+            if not self.order_rate_limiter.can_make_request():
+                wait = self.order_rate_limiter.time_until_next_slot()
+                reason = f"Order rate limit exceeded, retry in {wait:.1f}s"
+                self.signals_rejected += 1
+                logger.warning(f"Signal rejected: {reason}")
+                self.metrics.signal_processed(signal.symbol, "rejected")
+                self.metrics.risk_check_failed("order_rate_limit", reason)
+                self.bus.publish_system_event(
+                    event_type="signal_rejected",
+                    source="risk_manager",
+                    data={
+                        "symbol": signal.symbol,
+                        "side": signal.side,
+                        "reason": reason,
+                        "source": signal.source,
+                        "confidence": float(signal.confidence)
+                    }
+                )
+                return
+
             # Mark signal as processed (persistent deduplication)
             if not self.deduplication.mark_signal_processed(signal):
                 logger.warning(f"Failed to mark signal as processed: {signal.symbol}")
@@ -443,14 +553,30 @@ class EnhancedRiskManager:
             # Record rate limit usage
             self.signal_rate_limiter.record_request(f"{signal.symbol}_{signal.source}")
             
-            # Create order intent
-            order_intent = self.create_order_intent(signal)
-            
-            # Check order rate limit
-            if not self.order_rate_limiter.can_make_request():
-                logger.warning("Order rate limit exceeded, queuing for later")
+            # Size from live portfolio state; zero means the portfolio layer vetoed the trade
+            quantity, size_reasoning = self.calculate_position_size(signal)
+            if quantity <= 0:
+                self.signals_rejected += 1
+                logger.warning(f"Signal rejected by portfolio sizing: {size_reasoning}")
+                self.metrics.signal_processed(signal.symbol, "rejected")
+                self.metrics.risk_check_failed("position_sizing", size_reasoning)
+                self.bus.publish_system_event(
+                    event_type="signal_rejected",
+                    source="risk_manager",
+                    data={
+                        "symbol": signal.symbol,
+                        "side": signal.side,
+                        "reason": size_reasoning,
+                        "source": signal.source,
+                        "confidence": float(signal.confidence)
+                    }
+                )
                 return
-            
+            logger.info(f"Position sizing: {size_reasoning}")
+
+            # Create order intent
+            order_intent = self.create_order_intent(signal, quantity=quantity)
+
             # Mark order intent as processed to prevent duplicates
             if not self.deduplication.mark_order_processed(order_intent):
                 logger.warning(f"Order intent already processed: {order_intent.client_order_id}")
