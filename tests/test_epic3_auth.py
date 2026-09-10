@@ -430,3 +430,41 @@ class TestAuthPersistence:
         auth.create_user("mem_only_user", "m@x.com", "pw", auth.UserRole.VIEWER)
         assert not list(tmp_path.glob("*.json"))
         auth.USERS_DB.pop("mem_only_user", None)
+
+
+class TestSecretRotation:
+    """AUTH_SECRET_KEY rotation with a grace window: previous keys still verify."""
+
+    def test_previous_key_accepted_and_unknown_rejected(self, monkeypatch):
+        import lib.auth as auth
+        from datetime import datetime, timezone, timedelta
+        from jose import jwt
+        old, new = "old-secret-000000000000000000", "new-secret-111111111111111111"
+        exp = datetime.now(timezone.utc) + timedelta(minutes=5)
+        claims = {"sub": "rot", "role": "viewer", "permissions": [], "type": "access", "exp": exp}
+        tok_old = jwt.encode(claims, old, algorithm="HS256")
+
+        # Rotate: primary = new, old moved to the grace list.
+        monkeypatch.setattr(auth, "SECRET_KEY", new)
+        monkeypatch.setattr(auth, "PREVIOUS_SECRET_KEYS", [old])
+
+        td = auth.decode_token(tok_old, expected_type="access")
+        assert td is not None and td.username == "rot"          # old token still verifies
+
+        tok_unknown = jwt.encode(claims, "some-other-key-zzzzzzzzzz", algorithm="HS256")
+        assert auth.decode_token(tok_unknown, expected_type="access") is None   # foreign key rejected
+
+        # New tokens are signed with the new primary and verify.
+        fresh = auth.create_access_token(data={"sub": "rot", "role": "viewer", "permissions": []})
+        assert auth.decode_token(fresh, expected_type="access") is not None
+
+    def test_no_previous_keys_is_strict(self, monkeypatch):
+        import lib.auth as auth
+        from datetime import datetime, timezone, timedelta
+        from jose import jwt
+        monkeypatch.setattr(auth, "SECRET_KEY", "primary-only-key-2222222222")
+        monkeypatch.setattr(auth, "PREVIOUS_SECRET_KEYS", [])
+        claims = {"sub": "x", "role": "viewer", "permissions": [], "type": "access",
+                  "exp": datetime.now(timezone.utc) + timedelta(minutes=5)}
+        tok = jwt.encode(claims, "a-different-key-3333333333", algorithm="HS256")
+        assert auth.decode_token(tok, expected_type="access") is None

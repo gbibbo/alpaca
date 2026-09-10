@@ -23,9 +23,25 @@ from passlib.context import CryptContext
 
 # Configuration
 SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or secrets.token_urlsafe(32)  # In production, use env variable
+# Secret rotation with a grace window: new tokens are always signed with SECRET_KEY, but tokens
+# signed with a recently-retired key still verify while it is listed here (comma-separated in
+# AUTH_SECRET_KEY_PREVIOUS). Rotate: move the current key into PREVIOUS, set a new SECRET_KEY,
+# and drop the old one after the longest token lifetime (7 days) so all old tokens have expired.
+PREVIOUS_SECRET_KEYS = [k.strip() for k in os.getenv("AUTH_SECRET_KEY_PREVIOUS", "").split(",") if k.strip()]
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+
+def _decode_any_key(token: str) -> dict:
+    """Verify a token against the primary key, then any previous (grace-window) keys."""
+    last = None
+    for key in [SECRET_KEY, *PREVIOUS_SECRET_KEYS]:
+        try:
+            return jwt.decode(token, key, algorithms=[ALGORITHM])
+        except JWTError as exc:
+            last = exc
+    raise last or JWTError("no signing key verified the token")
 
 
 class UserRole(str, Enum):
@@ -181,9 +197,9 @@ def create_refresh_token(username: str) -> str:
 
 
 def decode_token(token: str, expected_type: str = "access") -> Optional[TokenData]:
-    """Decode and validate a JWT token."""
+    """Decode and validate a JWT token (accepts previous keys during a rotation grace window)."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = _decode_any_key(token)
         if payload.get("type") != expected_type:
             return None
         username: str = payload.get("sub")
