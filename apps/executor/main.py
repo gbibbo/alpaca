@@ -978,12 +978,19 @@ class EnhancedAlpacaExecutor:
         while self.running:
             try:
                 self.order_tracker.drain_outbox(self.bus)
-                if self.bus.redis_client.get('trading:emergency_stop'):
+                stop_id = self.bus.redis_client.get('trading:emergency_stop')
+                if stop_id:
+                    stop_id = stop_id if isinstance(stop_id, str) else stop_id.decode()
                     for broker_id in list(self.order_tracker.get_pending_orders()):
                         intent = self.order_tracker.orders_by_broker_id[broker_id]['intent']
                         if intent.side == SignalSide.BUY:
-                            self.trading_client.cancel_order_by_id(broker_id)
-                    self.bus.redis_client.set('trading:stop_ack', TimeUtils.utc_now().isoformat())
+                            try:
+                                self.trading_client.cancel_order_by_id(broker_id)
+                            except Exception as e:
+                                logger.warning(f"Could not cancel {broker_id} on stop: {e}")
+                    # Ack the SPECIFIC stop id so a stale ack from a previous stop cannot be
+                    # mistaken for this one.
+                    self.bus.redis_client.set('trading:stop_ack', stop_id)
                 # Epic 5: Check for order timeouts FIRST
                 timed_out = await self.order_tracker.check_timeouts()
 

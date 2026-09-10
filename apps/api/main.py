@@ -11,7 +11,7 @@ import sys
 import asyncio
 import uuid
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
 import logging
 import json
@@ -847,12 +847,43 @@ async def restart_service(service: str):
         METRICS['custom_errors'].labels(service='api', error_type='service_restart').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
+def _decode(v):
+    return v.decode() if isinstance(v, (bytes, bytearray)) else v
+
+
 @app.post("/system/emergency_stop", dependencies=[Depends(require_permission(Permission.EMERGENCY_STOP))])
 async def emergency_stop():
     if bus is None:
         raise HTTPException(503, 'No operational bus')
-    bus.redis_client.set('trading:emergency_stop', '1')
-    return {'status': 'stop_requested', 'blocked': True, 'executor_ack': bus.redis_client.get('trading:stop_ack')}
+    # A fresh stop id per request; the executor acks THIS id, so a stale ack from an earlier stop
+    # is never mistaken for confirmation of this one.
+    stop_id = f"{datetime.now(timezone.utc).isoformat()}_{uuid.uuid4().hex[:8]}"
+    bus.redis_client.set('trading:emergency_stop', stop_id)
+    bus.redis_client.delete('trading:stop_ack')
+    return {'status': 'stop_requested', 'stop_id': stop_id, 'blocked': True, 'executor_ack': False}
+
+
+@app.get("/system/stop_status", dependencies=[Depends(require_permission(Permission.READ_METRICS))])
+async def stop_status():
+    if bus is None:
+        raise HTTPException(503, 'No operational bus')
+    stop_id = _decode(bus.redis_client.get('trading:emergency_stop'))
+    ack = _decode(bus.redis_client.get('trading:stop_ack'))
+    return {'stopped': bool(stop_id), 'stop_id': stop_id,
+            'executor_ack': bool(stop_id) and ack == stop_id}  # only fresh, matching acks count
+
+
+@app.post("/system/resume", dependencies=[Depends(require_permission(Permission.EMERGENCY_STOP))])
+async def resume_trading():
+    """Lift an emergency stop. Authorized (EMERGENCY_STOP permission); clears both the stop and
+    its ack so the executor's submission guard stops blocking."""
+    if bus is None:
+        raise HTTPException(503, 'No operational bus')
+    was_stopped = bool(bus.redis_client.get('trading:emergency_stop'))
+    bus.redis_client.delete('trading:emergency_stop')
+    bus.redis_client.delete('trading:stop_ack')
+    logger.warning("Emergency stop lifted via /system/resume")
+    return {'status': 'resumed', 'was_stopped': was_stopped}
 
 
 # Monitoring and Logs
