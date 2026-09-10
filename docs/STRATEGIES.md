@@ -180,12 +180,29 @@ by momentum decile, D10 = winners), and top-level `comparisons` (excess over the
 universe). Ask first whether the **decile ladder** has economically sensible shape (high deciles
 beating low ones on average); "my portfolio made money" is the weaker question.
 
-**Universe is the real problem.** `ResearchConfig.universe` uses a `StaticUniverse` (fixed
-list) — it is survivorship-biased and fine for an architectural smoke test only. A serious
-experiment needs a point-in-time `Universe.members(as_of)` (who was eligible *then*), which is
-not implemented yet. Five symbols do not test the factor; hundreds do (top decile ≈ 50 names at
-≈2% each, at which point `max_position_size` stops mattering). Keep long only: momentum crashes
-come mostly from the short leg.
+**Universe is the real problem.** A fixed list (`ResearchConfig.universe`, `StaticUniverse`) is
+survivorship-biased — fine for a smoke test only. For a serious experiment set
+`ResearchConfig.universe_csv` (also via `--risk-params '{"universe_csv":"data/sp500/composition.csv"}'`)
+to a **point-in-time membership** file; the backtest then only holds names that were actually in
+the index on each date, and freezes the file's SHA256 (`universe_sha256`) into the result.
+
+Composition CSV format (`lib/portfolio_strategy.CsvPointInTimeUniverse`), header required:
+
+```
+date,symbol            # long  : one row per member per effective date
+2016-01-04,AAPL
+2016-01-04,MSFT
+...
+# or wide: date,symbols   with a ; , space or tab separated list per date
+```
+
+`members(as_of)` returns the constituents effective on the most recent date ≤ `as_of`
+(forward-filled), so a daily snapshot and a sparse change-log both work; dotted tickers like
+`BRK.B` load correctly. Getting the data is the remaining step (needs an external source, e.g.
+a free Wikipedia+Tiingo reconstruction such as `K0D1Z/sp500-quantitative-dataset` for a first
+pass, then a commercial source like EODHD as an independent cross-check). Five symbols do not
+test the factor; hundreds do (top decile ≈ 50 names at ≈2% each, so `max_position_size` stops
+mattering). Keep long only: momentum crashes come mostly from the short leg.
 
 ### TRADING_MODE
 

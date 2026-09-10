@@ -8,6 +8,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
@@ -48,6 +49,9 @@ class ResearchConfig(BaseModel):
     # Portfolio strategies: eligible symbols (None -> every symbol in the dataset). A static list
     # is survivorship-biased; use it for architectural smoke tests, not as historical evidence.
     universe: list[str] | None = None
+    # Point-in-time index membership CSV (date,symbol or date,symbols). When set, the portfolio
+    # path uses actual constituents per date instead of a static list (fixes survivorship bias).
+    universe_csv: str | None = None
 
     @model_validator(mode="after")
     def unique(self):
@@ -101,9 +105,14 @@ def load_csv(directory, symbols, timeframe, start=None, end=None):
         raise ValueError("start must precede end (end is exclusive)")
     bars = []
     for symbol in symbols:
-        if not symbol.isalnum():
-            raise ValueError("CSV symbols must be alphanumeric")
-        path = root / f"{symbol}.csv"
+        # Accept the same ticker scheme as Bar (letters, digits, dots -> e.g. BRK.B, BF.B),
+        # but never anything that could escape the data directory via the filename.
+        sym = str(symbol).strip().upper()
+        if not re.fullmatch(r"[A-Z0-9.]+", sym) or ".." in sym:
+            raise ValueError(f"Invalid CSV symbol '{symbol}'")
+        path = (root / f"{sym}.csv").resolve()
+        if root not in path.parents:
+            raise ValueError(f"CSV path for '{symbol}' escapes the data directory")
         with path.open(newline="", encoding="utf-8-sig") as source:
             selected = []
             for row in csv.DictReader(source):
@@ -218,13 +227,14 @@ def run_portfolio_account(name, ordered, config):
     actually available. Everything is derived from one equity snapshot, so results do not depend
     on the order symbols are listed in.
     """
-    from lib.portfolio_strategy import create_portfolio_strategy, StaticUniverse
+    from lib.portfolio_strategy import create_portfolio_strategy, StaticUniverse, CsvPointInTimeUniverse
     from lib.rebalance import plan_rebalance, one_way_turnover
     strategy = create_portfolio_strategy(name)
     if strategy.timeframe != ordered[0].timeframe:
         raise ValueError(f"{name} requires {strategy.timeframe.value}; supply matching closed bars")
     symbols = sorted({b.symbol for b in ordered})
-    universe = StaticUniverse(config.universe or symbols)
+    universe = CsvPointInTimeUniverse(config.universe_csv) if config.universe_csv \
+        else StaticUniverse(config.universe or symbols)
     ledger = Portfolio(config.initial_cash)
     slip, fee_rate = D(config.slippage_bps / 10000), D(config.commission_bps / 10000)
     buy_cost_factor = (1 + slip) * (1 + fee_rate)
@@ -489,5 +499,8 @@ def run_backtest(bars, config):
         ew = accounts["equal_weight_universe"]["metrics"]["return_pct"]
         payload["comparisons"] = {n: {"excess_return_pct_over_equal_weight_universe": a["metrics"]["return_pct"] - ew}
                                   for n, a in accounts.items() if a.get("kind") == "portfolio" and n != "equal_weight_universe"}
+    # Freeze the point-in-time membership too, so a portfolio result is fully reproducible.
+    if config.universe_csv:
+        payload["universe_sha256"] = hashlib.sha256(Path(config.universe_csv).read_bytes()).hexdigest()
     payload["result_sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return payload
