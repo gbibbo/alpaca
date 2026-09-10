@@ -170,3 +170,6 @@ data/backtest_results/*_results.json
 # Ad-hoc audit / handoff run outputs
 out/*.txt
 out/*.js
+
+# Real market data pulled for local backtest demos (licensing; not a fixture)
+data/real/

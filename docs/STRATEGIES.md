@@ -15,7 +15,7 @@ Flow:
 Alpaca 1m  ──┬────────────────────────▶ 1m strategies   (random_50_50, smart_technical)
              ├─ resample 5m ──────────▶ 5m strategies   (intraday_momentum_5m)
              └─ resample 1h ──────────▶ 1h strategies   (hourly_trend)
-Alpaca 1d  ──────────────────────────▶ 1d strategies   (daily_trend)
+Alpaca 1d  ──────────────────────────▶ 1d strategies   (daily_trend, turtle_breakout)
                           │
                        Signal (symbol, side, confidence, timeframe, source)
                           │
@@ -39,7 +39,7 @@ Rough history needed (also what the ingestor backfills):
 | Intraday fast | 1m | `HISTORICAL_DAYS` (default 7) | `smart_technical` |
 | Intraday | 5m | derived from 1m | `intraday_momentum_5m` |
 | Short term | 1h | derived from 1m | `hourly_trend` |
-| Swing | 1d | `DAILY_HISTORY_DAYS` (default 400) | `daily_trend` |
+| Swing | 1d | `DAILY_HISTORY_DAYS` (default 400) | `daily_trend`, `turtle_breakout` |
 
 ## Writing a strategy
 

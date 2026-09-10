@@ -250,3 +250,47 @@ class DailyTrendStrategy(Strategy):
         else:
             return None
         return self.make_signal(symbol, side, confidence, bars, {"sma_50": sma_50, "sma_200": sma_200, "rsi": rsi})
+
+
+# ---------------------------------------------------------------- 1d (breakout)
+@register
+class TurtleBreakout(Strategy):
+    """Donchian channel breakout (classic Turtle-style), long-only and easy to audit.
+
+    Entry: today's close is strictly above the highest HIGH of the prior `entry_channel` bars
+           (a new N-day high).
+    Exit:  today's close is strictly below the lowest LOW of the prior `exit_channel` bars
+           (a new M-day low); the engine also attaches the configured protective stop/target.
+
+    Every decision reduces to one comparison against a rolling extreme of *prior* bars (the
+    current bar is excluded, so the rule can never be trivially true). Parameters are explicit.
+    """
+    name = "turtle_breakout"
+    timeframe = TimeFrame.DAY
+    entry_channel = 20
+    exit_channel = 10
+    lookback_bars = 21          # entry_channel prior bars + the current bar
+    max_history = 60
+    cooldown_seconds = 86400    # at most one signal per session per symbol
+    signal_expiry_seconds = 4 * 86400
+    description = "Donchian 20-day high entry / 10-day low exit on daily bars"
+
+    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
+        prior_highs = [float(b.high) for b in bars[:-1]]
+        prior_lows = [float(b.low) for b in bars[:-1]]
+        if len(prior_highs) < self.entry_channel:
+            return None
+        close = float(bars[-1].close)
+        entry_level = max(prior_highs[-self.entry_channel:])
+        exit_level = min(prior_lows[-self.exit_channel:]) if len(prior_lows) >= self.exit_channel else None
+
+        if close > entry_level:
+            # Confidence grows with how decisively the breakout clears the channel.
+            confidence = min(0.85, 0.6 + (close / entry_level - 1) * 10)
+            return self.make_signal(symbol, SignalSide.BUY, confidence, bars,
+                                    {"rule": "close>20d_high", "entry_level": entry_level, "close": close})
+        if exit_level is not None and close < exit_level:
+            confidence = min(0.85, 0.6 + (1 - close / exit_level) * 10)
+            return self.make_signal(symbol, SignalSide.SELL, confidence, bars,
+                                    {"rule": "close<10d_low", "exit_level": exit_level, "close": close})
+        return None
