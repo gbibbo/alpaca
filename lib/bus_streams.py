@@ -829,13 +829,46 @@ class RedisStreamsBus:
         stream = self.streams[stream_type]
         group = self.consumer_groups[stream_type]
         await self._ensure_group(stream, group)
-        # Recover this consumer's unacknowledged messages before reading new ones.
+
+        def _parse(message_id, payload):
+            """Return the model, or None for a poison message (logged and acked so it cannot be
+            redelivered forever)."""
+            try:
+                return model.model_validate_json(payload['data'])
+            except Exception as exc:
+                logger.error(f"Dropping unparseable {stream} message {message_id}: {exc}")
+                self.ack(stream_type, message_id)
+                return None
+
+        # Phase 1: replay THIS consumer's own un-acked backlog (recovery after a restart/crash).
+        # xreadgroup with an explicit id reads from the pending entries list, not new messages.
+        cursor = '0'
         while True:
             rows = await asyncio.to_thread(self.redis_client.xreadgroup, group, self.consumer_id,
-                                            {stream: '>'}, count=32, block=1000)
+                                           {stream: cursor}, count=64)
+            pending = [(mid, p) for _, msgs in rows for mid, p in msgs]
+            if not pending:
+                break
+            for message_id, payload in pending:
+                cursor = message_id
+                value = _parse(message_id, payload)
+                if value is None:
+                    continue
+                if symbol == '*' or value.symbol == symbol:
+                    yield value
+                self.ack(stream_type, message_id)
+
+        # Phase 2: new messages. ACK happens only after the consumer resumes the generator,
+        # i.e. after it finished the yielded item; a crash mid-processing leaves the entry
+        # pending for phase-1 recovery on the next run.
+        while True:
+            rows = await asyncio.to_thread(self.redis_client.xreadgroup, group, self.consumer_id,
+                                           {stream: '>'}, count=32, block=1000)
             for _, messages in rows:
                 for message_id, payload in messages:
-                    value = model.model_validate_json(payload['data'])
+                    value = _parse(message_id, payload)
+                    if value is None:
+                        continue
                     if symbol == '*' or value.symbol == symbol:
                         yield value
                     self.ack(stream_type, message_id)

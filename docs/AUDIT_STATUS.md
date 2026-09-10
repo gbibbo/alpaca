@@ -37,7 +37,7 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 - **pending** — Periodic real reconciliation of the operational snapshot (currently published on order validation; 60s staleness → 503).
 - **partial** — Login **rate limiting** done (per-username lockout, 429 + Retry-After; env-tunable); access/refresh token-type separation tested; **user/API-key persistence** done (opt-in via `AUTH_DB_PATH`, atomic write, survives restart, hashes only). **Pending**: secret (AUTH_SECRET_KEY) rotation with a grace window.
 - **pending** — Persist PnL marks/config across restarts; per-account/mode journal.
-- **pending** — Streams `_subscribe_model` adapters only read `>`; implement reclaim + correct ACK; test consumer groups against real Redis.
+- **done** — Streams `_subscribe_model` adapters now recover a consumer's own un-acked backlog on restart (phase-1 replay from the pending list, then new messages) and drop poison messages instead of redelivering forever; tested against real Redis (`tests/test_streams_recovery.py`). The `consume_with_handler` path (used by the services) already had xautoclaim-based reclaim. **Pending**: cross-consumer (dead-consumer) reclaim inside `_subscribe_model`, and a dead-letter stream rather than log-and-drop.
 
 ## P2 — tests / docs / delivery
 - **done** — README/QUICK_START/STRATEGIES updated for the isolated engine, CLI and `TRADING_MODE` (this batch).
