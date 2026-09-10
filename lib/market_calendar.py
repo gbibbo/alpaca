@@ -11,9 +11,12 @@ schedule changes. For live trading the Alpaca Clock/Calendar API remains the sou
 this module exists so historical replays have a deterministic, year-agnostic session model.
 """
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
+
+NY = ZoneInfo("America/New_York")
 
 REGULAR_OPEN = time(9, 30)
 REGULAR_CLOSE = time(16, 0)
@@ -114,6 +117,21 @@ def session_hours(d) -> Tuple[time, time]:
 
 def session_close(d) -> time:
     return session_hours(d)[1]
+
+
+def session_bounds(d) -> Optional[Tuple[datetime, datetime]]:
+    """Regular-session open and close as tz-aware UTC datetimes for a trading day, or None.
+
+    Uses America/New_York, so DST is handled automatically (09:30 ET is 13:30 UTC in summer,
+    14:30 UTC in winter), and early-close days end at 13:00 ET.
+    """
+    dd = _as_date(d)
+    if not is_trading_day(dd):
+        return None
+    open_t, close_t = session_hours(dd)
+    open_utc = datetime.combine(dd, open_t, tzinfo=NY).astimezone(timezone.utc)
+    close_utc = datetime.combine(dd, close_t, tzinfo=NY).astimezone(timezone.utc)
+    return open_utc, close_utc
 
 
 def _as_date(d) -> date:

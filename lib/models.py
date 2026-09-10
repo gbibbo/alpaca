@@ -49,6 +49,8 @@ class TimeFrame(str, Enum):
     """Supported timeframes"""
     MINUTE = "1m"
     FIVE_MINUTE = "5m"
+    FIFTEEN_MINUTE = "15m"
+    THIRTY_MINUTE = "30m"
     HOUR = "1h"
     DAY = "1d"
 

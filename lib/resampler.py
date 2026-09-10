@@ -14,13 +14,19 @@ from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from lib.models import Bar, TimeFrame
-from lib.timeframes import bucket_start, parse_timeframe
+from lib.timeframes import bucket_start, session_bucket_start, parse_timeframe
 
 logger = logging.getLogger(__name__)
 
 
 class BarResampler:
-    def __init__(self, targets: Iterable = (TimeFrame.FIVE_MINUTE, TimeFrame.HOUR)):
+    def __init__(self, targets: Iterable = (TimeFrame.FIVE_MINUTE, TimeFrame.HOUR),
+                 session_aligned: bool = False):
+        # session_aligned=True aligns intraday buckets to the 09:30 ET session open and drops
+        # pre/post-market bars, so buckets never straddle sessions (required for intraday
+        # research on a consolidated feed that includes extended hours). Default False keeps the
+        # original clock-aligned behaviour for the existing live pipeline.
+        self.session_aligned = session_aligned
         self.targets: List[TimeFrame] = []
         for t in targets:
             tf = parse_timeframe(t)
@@ -53,11 +59,16 @@ class BarResampler:
         completed: List[Bar] = []
         for tf in self.targets:
             key = (bar.symbol, tf)
-            start = bucket_start(bar.timestamp, tf)
+            if self.session_aligned:
+                start = session_bucket_start(bar.timestamp, tf)
+                if start is None:
+                    continue  # pre/post-market or non-trading bar: not part of any session bucket
+            else:
+                start = bucket_start(bar.timestamp, tf)
             current = self._open.get(key)
 
             if current is not None and current["start"] != start:
-                completed.append(self._close(key))
+                completed.append(self._close(key, complete=True))
                 current = None
 
             if current is None:
@@ -80,16 +91,19 @@ class BarResampler:
         out = []
         for key in list(self._open.keys()):
             if symbol is None or key[0] == symbol:
-                out.append(self._close(key))
+                out.append(self._close(key, complete=False))
         return out
 
-    def _close(self, key: Tuple[str, TimeFrame]) -> Bar:
+    def _close(self, key: Tuple[str, TimeFrame], complete: bool = True) -> Bar:
+        # A bucket closed because the next bucket started is complete; one emitted by flush() (end
+        # of data, no successor) is partial. This is correct for session-aligned buckets too,
+        # where a session's final bucket is legitimately short (e.g. a 30-min last 1h bucket).
         symbol, tf = key
         b = self._open.pop(key)
         self.bars_out += 1
         return Bar(
             symbol=symbol,
-            is_complete=b["count"] == {TimeFrame.FIVE_MINUTE: 5, TimeFrame.HOUR: 60}[tf],
+            is_complete=complete,
             timestamp=b["start"],
             open=b["open"], high=b["high"], low=b["low"], close=b["close"],
             volume=b["volume"],
