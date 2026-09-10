@@ -4,6 +4,8 @@ os.environ.setdefault("BUS_BACKEND", "streams")
 
 from lib.bus import connect_bus, get_bus
 
+pytestmark = pytest.mark.usefixtures("real_redis_bus")  # real Redis Streams; skips if unavailable (see conftest)
+
 def _sync_redis(backend):
     try:
         return backend.redis_client

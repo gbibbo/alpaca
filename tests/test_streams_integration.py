@@ -260,6 +260,14 @@ class StreamsIntegrationTest:
 
 
 # Add pytest-compatible test functions
+import pytest
+
+# Force a real-Redis Streams bus (and skip if none is reachable). Without this, another module's
+# import-time os.environ.setdefault("USE_FAKE_REDIS", "1") freezes the settings singleton to
+# fakeredis for the whole process, so these tests fall back to Pub/Sub and fail in the full suite.
+pytestmark = pytest.mark.usefixtures("real_redis_bus")
+
+
 def test_streams_backend_initialization():
     """Test that Streams backend initializes correctly"""
     os.environ["BUS_BACKEND"] = "streams"

@@ -5,6 +5,8 @@ os.environ['BUS_BACKEND'] = 'streams'
 
 from lib.bus import connect_bus, get_bus
 
+pytestmark = pytest.mark.usefixtures("real_redis_bus")  # real Redis Streams; skips if unavailable (see conftest)
+
 @pytest.mark.asyncio
 async def test_backend_has_subscribe_system_events():
     connect_bus()

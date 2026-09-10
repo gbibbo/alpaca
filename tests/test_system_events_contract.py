@@ -9,6 +9,8 @@ os.environ.setdefault("BUS_BACKEND", "streams")
 from lib.bus import connect_bus, get_bus
 from lib.time_utils import TimeUtils
 
+pytestmark = pytest.mark.usefixtures("real_redis_bus")  # real Redis Streams; skips if unavailable (see conftest)
+
 def _b2s(x):
     return x.decode() if isinstance(x, (bytes, bytearray)) else x
 
