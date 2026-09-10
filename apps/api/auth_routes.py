@@ -89,14 +89,28 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 
     Use username and password to get access and refresh tokens.
     """
+    from lib.auth import check_login_allowed, record_login_failure, record_login_success
+
+    # Throttle brute-force attempts per username before checking the password.
+    allowed, retry_after = check_login_allowed(form_data.username)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts; try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = authenticate_user(form_data.username, form_data.password)
 
     if not user or user.disabled:
+        record_login_failure(form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    record_login_success(form_data.username)
 
     # Get user permissions
     permissions = get_user_permissions(user.role)

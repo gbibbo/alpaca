@@ -256,6 +256,49 @@ def _init_default_users():
 API_KEYS_DB: dict[str, APIKey] = {}
 
 
+# --- Login rate limiting (in-memory, per key) --------------------------------
+import time as _time
+from collections import defaultdict as _defaultdict
+
+LOGIN_MAX_ATTEMPTS = int(os.getenv("AUTH_LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_WINDOW_SECONDS = int(os.getenv("AUTH_LOGIN_WINDOW_SECONDS", "300"))
+LOGIN_LOCKOUT_SECONDS = int(os.getenv("AUTH_LOGIN_LOCKOUT_SECONDS", "300"))
+_login_failures: dict = _defaultdict(list)
+_login_locked_until: dict = {}
+
+
+def check_login_allowed(key: str):
+    """Return (allowed, retry_after_seconds). Call before authenticating a login attempt."""
+    now = _time.monotonic()
+    until = _login_locked_until.get(key)
+    if until is not None and now < until:
+        return False, int(until - now) + 1
+    return True, 0
+
+
+def record_login_failure(key: str) -> None:
+    """Count a failed attempt; lock the key out once too many happen in the window."""
+    now = _time.monotonic()
+    fails = [t for t in _login_failures[key] if now - t < LOGIN_WINDOW_SECONDS]
+    fails.append(now)
+    if len(fails) >= LOGIN_MAX_ATTEMPTS:
+        _login_locked_until[key] = now + LOGIN_LOCKOUT_SECONDS
+        _login_failures[key] = []
+    else:
+        _login_failures[key] = fails
+
+
+def record_login_success(key: str) -> None:
+    _login_failures.pop(key, None)
+    _login_locked_until.pop(key, None)
+
+
+def reset_login_throttle() -> None:
+    """Clear all throttle state (tests)."""
+    _login_failures.clear()
+    _login_locked_until.clear()
+
+
 def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
     """Authenticate a user by username and password."""
     _init_default_users()  # Ensure default users are loaded

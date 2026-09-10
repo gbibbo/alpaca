@@ -35,7 +35,7 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 - **done** — Retired legacy `/backtest/quick`; download route requires `READ_BACKTEST` (`94fea7d`).
 - **partial** — Server lifespan verified over HTTP; **browser/visual** verification of the research UI still not done (cannot run a browser here).
 - **pending** — Periodic real reconciliation of the operational snapshot (currently published on order validation; 60s staleness → 503).
-- **pending** — Persist auth users/API keys; login rate limiting; secret rotation; more access/refresh/permission tests.
+- **partial** — Login **rate limiting** done (per-username lockout, 429 + Retry-After; env-tunable) with unit + route tests; access/refresh token-type separation tested. **Pending**: persist users/API keys to disk, secret rotation.
 - **pending** — Persist PnL marks/config across restarts; per-account/mode journal.
 - **pending** — Streams `_subscribe_model` adapters only read `>`; implement reclaim + correct ACK; test consumer groups against real Redis.
 

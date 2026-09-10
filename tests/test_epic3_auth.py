@@ -353,3 +353,49 @@ class TestUserModel:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestLoginRateLimit:
+    """Login throttling to blunt password brute force."""
+
+    def test_lockout_after_max_attempts(self):
+        from lib.auth import (check_login_allowed, record_login_failure,
+                              reset_login_throttle, LOGIN_MAX_ATTEMPTS)
+        reset_login_throttle()
+        key = "victim"
+        for _ in range(LOGIN_MAX_ATTEMPTS):
+            assert check_login_allowed(key)[0]
+            record_login_failure(key)
+        allowed, retry = check_login_allowed(key)
+        assert not allowed and retry > 0
+        reset_login_throttle()
+        assert check_login_allowed(key)[0]
+
+    def test_success_clears_failures(self):
+        from lib.auth import (check_login_allowed, record_login_failure,
+                              record_login_success, reset_login_throttle)
+        reset_login_throttle()
+        key = "user2"
+        record_login_failure(key)
+        record_login_failure(key)
+        record_login_success(key)
+        assert check_login_allowed(key)[0]
+
+
+class TestTokenTypeSeparation:
+    """Access and refresh tokens are not interchangeable."""
+
+    def test_refresh_and_access_types_enforced(self):
+        from lib.auth import create_refresh_token, create_access_token, decode_token, USERS_DB, UserInDB, get_password_hash
+        USERS_DB.pop("rt_user", None)
+        USERS_DB["rt_user"] = UserInDB(username="rt_user", email="rt@localhost",
+                                       role=UserRole.VIEWER, hashed_password=get_password_hash("x"))
+        try:
+            r = create_refresh_token("rt_user")
+            assert decode_token(r, expected_type="refresh") is not None
+            assert decode_token(r, expected_type="access") is None
+            a = create_access_token(data={"sub": "rt_user", "role": "viewer", "permissions": []})
+            assert decode_token(a, expected_type="access") is not None
+            assert decode_token(a, expected_type="refresh") is None
+        finally:
+            USERS_DB.pop("rt_user", None)
