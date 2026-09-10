@@ -426,33 +426,52 @@ def _intraday_fill(ledger, name, sym, side, qty, ref, config, ts):
 def run_intraday_account(name, ordered, config, strategy):
     """Dedicated intraday execution path with a first-class time-based / session-close exit
     contract. Regular trading hours only (the input bars should already be RTH). Rules:
+      - only COMPLETE sessions are traded: a session's close is derived from the market calendar
+        (lib.session_filter), never inferred from the last bar that happens to be present, so a
+        truncated data pull (partial first/last session) is discarded, not mistaken for a full day;
       - decisions use only CLOSED, COMPLETE bars; never the same bar before its close;
       - an entry signal fills at the NEXT bar's open (never the signalling bar);
       - a position exits after Signal.hold_bars bars (at that bar's open), and is force-flattened
-        at the session's last bar CLOSE (no overnight);
+        at the session's calendar CLOSE bar (no overnight);
+      - an OPPOSING signal closes a position at the next open when strategy.signal_driven_exit;
+      - a SELL while flat opens a SHORT when strategy.allow_short (symmetric adverse costs);
       - per-session strategy state is reset via strategy.on_session_start at each session's open.
-    Long-only; whole shares; sized to max_position_size at decision time.
+    Whole shares; sized to max_position_size at decision time.
     """
     if strategy.timeframe != ordered[0].timeframe:
         raise ValueError(f"{name} requires {strategy.timeframe.value}; supply matching closed bars")
+    from lib.session_filter import classify_sessions, expected_last_bar_start
+
+    tf = strategy.timeframe
+    audit = classify_sessions(ordered, tf)
+    complete = audit["complete_keys"]
+    ordered = [b for b in ordered if (b.symbol, session_date_of(b)) in complete]
+    if not ordered:
+        raise ValueError(f"{name}: no COMPLETE RTH sessions in the supplied bars "
+                         f"(all {audit['totals']['total']} sessions were partial/misaligned)")
+    session_audit = {"timeframe": tf.value, "totals": audit["totals"],
+                     "per_symbol": audit["per_symbol"],
+                     "kept_sessions": len({(b.symbol, session_date_of(b)) for b in ordered})}
+
     ledger = Portfolio(config.initial_cash)
     symbols = sorted({b.symbol for b in ordered})
     buy_cost_factor = (1 + D(config.slippage_bps) / 10000 + D(config.spread_bps) / 20000) * (1 + D(config.commission_bps) / 10000)
 
-    # last bar timestamp of each (symbol, session) -> where a forced close must happen
-    last_of_session = defaultdict(dict)
+    # Calendar-derived last bar of each (symbol, session): the forced-close bar. Never "the last
+    # bar present". Sessions are already filtered to complete, so this bar is guaranteed present.
+    close_start = {}
     for b in ordered:
-        sd = session_date_of(b)
-        if b.timestamp > last_of_session[b.symbol].get(sd, b.timestamp - timedelta(seconds=1)):
-            last_of_session[b.symbol][sd] = b.timestamp
+        key = (b.symbol, session_date_of(b))
+        if key not in close_start:
+            close_start[key] = expected_last_bar_start(session_date_of(b), tf)
 
     hist = defaultdict(list)
     st = {s: {"session": None, "seq": 0, "entry_seq": None, "hold": None, "pending": None,
-              "entry_ts": None, "entry_px": None} for s in symbols}
+              "pending_exit": False, "entry_ts": None, "entry_px": None, "dir": None} for s in symbols}
     curve, signals, rejections, trades = [], [], [], []
 
-    def _open_trade(sym, price, ts):
-        st[sym]["entry_ts"], st[sym]["entry_px"] = ts, float(price)
+    def _open_trade(sym, price, ts, direction):
+        st[sym]["entry_ts"], st[sym]["entry_px"], st[sym]["dir"] = ts, float(price), direction
 
     def _close_trade(sym, price, ts, reason, exit_ts=None):
         # exit_ts lets a forced session-close record the exit at the bar's CLOSE (bar start + one
@@ -462,10 +481,11 @@ def run_intraday_account(name, ordered, config, strategy):
         s = st[sym]
         xt = exit_ts if exit_ts is not None else ts
         if s["entry_ts"] is not None:
-            trades.append({"symbol": sym, "entry": s["entry_ts"].isoformat(), "exit": xt.isoformat(),
+            trades.append({"symbol": sym, "direction": s["dir"],
+                           "entry": s["entry_ts"].isoformat(), "exit": xt.isoformat(),
                            "holding_seconds": (xt - s["entry_ts"]).total_seconds(),
                            "entry_price": s["entry_px"], "exit_price": float(price), "exit_reason": reason})
-        s["entry_ts"] = s["entry_px"] = s["entry_seq"] = s["hold"] = None
+        s["entry_ts"] = s["entry_px"] = s["entry_seq"] = s["hold"] = s["dir"] = None
 
     for ts, batch in groupby(ordered, key=lambda b: b.timestamp):
         batch = list(batch)
@@ -475,11 +495,11 @@ def run_intraday_account(name, ordered, config, strategy):
             sym = bar.symbol
             s = st[sym]
             sd = session_date_of(bar)
-            is_last = last_of_session[sym][sd] == bar.timestamp
+            is_last = close_start.get((sym, sd)) == bar.timestamp
             vol_cap = int(bar.volume * config.max_volume_participation)
 
             if s["session"] != sd:                      # new session: reset per-session state
-                s.update(session=sd, seq=0, entry_seq=None, hold=None, pending=None)
+                s.update(session=sd, seq=0, entry_seq=None, hold=None, pending=None, pending_exit=False)
                 strategy.on_session_start(sym)
             else:
                 s["seq"] += 1
@@ -487,49 +507,72 @@ def run_intraday_account(name, ordered, config, strategy):
             if len(hist[sym]) > strategy.max_history:
                 hist[sym] = hist[sym][-strategy.max_history:]
 
-            held = int(ledger.positions.get(sym, D(0)))
-            # (1) time-based exit at THIS bar's open
-            if held > 0 and s["entry_seq"] is not None and s["hold"] is not None and (s["seq"] - s["entry_seq"]) >= s["hold"]:
-                qty = min(held, vol_cap)
+            pos = int(ledger.positions.get(sym, D(0)))
+            # (1) time-based exit at THIS bar's open (both directions)
+            if pos != 0 and s["entry_seq"] is not None and s["hold"] is not None and (s["seq"] - s["entry_seq"]) >= s["hold"]:
+                side = "SELL" if pos > 0 else "BUY"
+                qty = min(abs(pos), vol_cap)
                 if qty > 0:
-                    px = _intraday_fill(ledger, name, sym, "SELL", qty, bar.open, config, ts)
+                    px = _intraday_fill(ledger, name, sym, side, qty, bar.open, config, ts)
                     vol_cap -= qty
-                    if int(ledger.positions.get(sym, D(0))) <= 0:
+                    if int(ledger.positions.get(sym, D(0))) == 0:
                         _close_trade(sym, px, ts, "time")
-                held = int(ledger.positions.get(sym, D(0)))
+                pos = int(ledger.positions.get(sym, D(0)))
+            # (1b) signal-driven exit at THIS bar's open (an opposing signal seen last bar)
+            if pos != 0 and s["pending_exit"]:
+                side = "SELL" if pos > 0 else "BUY"
+                qty = min(abs(pos), vol_cap)
+                if qty > 0:
+                    px = _intraday_fill(ledger, name, sym, side, qty, bar.open, config, ts)
+                    vol_cap -= qty
+                    if int(ledger.positions.get(sym, D(0))) == 0:
+                        _close_trade(sym, px, ts, "signal")
+                s["pending_exit"] = False
+                pos = int(ledger.positions.get(sym, D(0)))
             # (2) pending entry at THIS bar's open (only if flat and not the last bar of the
             #     session, unless the strategy explicitly allows a one-bar last-bar hold)
             allow_last = getattr(strategy, "allow_last_bar_entry", False)
             if s["pending"] is not None:
-                if held <= 0 and (not is_last or allow_last):
+                if pos == 0 and (not is_last or allow_last):
+                    side = s["pending"]["side"]
                     qty = min(s["pending"]["qty"], vol_cap)
                     if qty > 0:
-                        px = _intraday_fill(ledger, name, sym, "BUY", qty, bar.open, config, ts)
+                        px = _intraday_fill(ledger, name, sym, side, qty, bar.open, config, ts)
                         vol_cap -= qty
                         s["entry_seq"], s["hold"] = s["seq"], s["pending"]["hold"]
-                        _open_trade(sym, px, ts)
-                        held = int(ledger.positions.get(sym, D(0)))
+                        _open_trade(sym, px, ts, "long" if side == "BUY" else "short")
+                        pos = int(ledger.positions.get(sym, D(0)))
                 s["pending"] = None
-            # (3) forced session-close flatten at THIS bar's CLOSE (no overnight; full size)
-            if held > 0 and is_last and strategy.exit_at_session_close:
-                px = _intraday_fill(ledger, name, sym, "SELL", held, bar.close, config, ts)
+            # (3) forced session-close flatten at THIS bar's CLOSE (no overnight; full size, both dirs)
+            if pos != 0 and is_last and strategy.exit_at_session_close:
+                side = "SELL" if pos > 0 else "BUY"
+                px = _intraday_fill(ledger, name, sym, side, abs(pos), bar.close, config, ts)
                 _close_trade(sym, px, ts, "session_close",
                              exit_ts=ts + timedelta(seconds=timeframe_seconds(strategy.timeframe)))
-                held = 0
-            # (4) decision on this CLOSED, COMPLETE bar (flat, not the last bar)
-            if getattr(bar, "is_complete", True) and held <= 0 and s["pending"] is None and not is_last:
-                signal = strategy.analyze(sym, hist[sym])
-                if signal is not None and str(getattr(signal.side, "value", signal.side)).upper() == "BUY" \
-                        and float(signal.confidence) >= strategy.min_confidence:
-                    budget = min(ledger.equity * D(config.max_position_size), max(D(0), ledger.cash))
-                    qty = int(budget / (bar.close * buy_cost_factor)) if bar.close > 0 else 0
-                    if qty > 0:
-                        s["pending"] = {"qty": qty, "hold": signal.hold_bars}
-                        at = available_at(bar)
-                        signals.append({"symbol": sym, "side": "BUY", "timestamp": at.isoformat(),
-                                        "quantity_requested": qty, "hold_bars": signal.hold_bars})
-                    else:
-                        rejections.append({"symbol": sym, "timestamp": ts.isoformat(), "reason": "size_zero"})
+                pos = 0
+            # (4) decision on this CLOSED, COMPLETE bar (not the last bar)
+            if getattr(bar, "is_complete", True) and not is_last:
+                pos = int(ledger.positions.get(sym, D(0)))
+                if pos == 0 and s["pending"] is None:               # ENTRY decision (flat)
+                    signal = strategy.analyze(sym, hist[sym])
+                    if signal is not None and float(signal.confidence) >= strategy.min_confidence:
+                        side = str(getattr(signal.side, "value", signal.side)).upper()
+                        if side == "BUY" or (side == "SELL" and strategy.allow_short):
+                            budget = min(ledger.equity * D(config.max_position_size), max(D(0), ledger.cash))
+                            qty = int(budget / (bar.close * buy_cost_factor)) if bar.close > 0 else 0
+                            if qty > 0:
+                                s["pending"] = {"qty": qty, "hold": signal.hold_bars, "side": side}
+                                at = available_at(bar)
+                                signals.append({"symbol": sym, "side": side, "timestamp": at.isoformat(),
+                                                "quantity_requested": qty, "hold_bars": signal.hold_bars})
+                            else:
+                                rejections.append({"symbol": sym, "timestamp": ts.isoformat(), "reason": "size_zero"})
+                elif pos != 0 and strategy.signal_driven_exit and not s["pending_exit"]:  # EXIT decision (held)
+                    signal = strategy.analyze(sym, hist[sym])
+                    if signal is not None and float(signal.confidence) >= strategy.min_confidence:
+                        side = str(getattr(signal.side, "value", signal.side)).upper()
+                        if (pos > 0 and side == "SELL") or (pos < 0 and side == "BUY"):
+                            s["pending_exit"] = True
             ledger.mark(sym, bar.close)
         curve.append(ledger.snapshot(max(b.timestamp for b in batch).isoformat()))
 
@@ -563,9 +606,13 @@ def run_intraday_account(name, ordered, config, strategy):
         "turnover": metrics["turnover"],
         "pnl_per_unit_turnover": (metrics["net_return_pct"] / (metrics["turnover"] * 100))
         if metrics["turnover"] else None,
+        "long_trades": sum(1 for t in trades if t.get("direction") == "long"),
+        "short_trades": sum(1 for t in trades if t.get("direction") == "short"),
+        "complete_sessions": session_audit["totals"]["complete"],
+        "incomplete_sessions_discarded": session_audit["totals"]["incomplete"],
     }
     return {"metrics": metrics, "equity_curve": curve, "fills": ledger.fills, "signals": signals,
-            "rejections": rejections, "trades": trades,
+            "rejections": rejections, "trades": trades, "session_audit": session_audit,
             "final_portfolio": ledger.snapshot(curve[-1]["timestamp"]),
             "warmup_bars": strategy.lookback_bars,
             "first_fill_timestamp": ledger.fills[0]["timestamp"] if ledger.fills else None,

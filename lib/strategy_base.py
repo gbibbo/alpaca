@@ -55,6 +55,13 @@ class Strategy(ABC):
                                        # bar (open) and be force-closed at that same bar's close --
                                        # a legitimate one-bar hold (e.g. the Gao et al. last-half-hour
                                        # position). Default False: never open a doomed last-bar entry.
+    allow_short: bool = False          # if True, a SELL signal while flat opens a SHORT (research
+                                       # engine only; symmetric costs). Default False keeps every
+                                       # existing strategy long-only and byte-for-byte unchanged.
+    signal_driven_exit: bool = False   # if True, an OPPOSING signal (SELL while long / BUY while
+                                       # short) closes the position at the next bar's open, in
+                                       # addition to the time / session-close exits. Default False:
+                                       # positions leave only via hold_bars or the session close.
 
     def __init__(self, **params):
         self.params = params

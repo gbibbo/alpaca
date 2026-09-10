@@ -18,6 +18,17 @@ be tuned against results. Negative results are reported, not hidden.
 - **Symbols:** SPY (primary), QQQ (replication).
 - **Window:** the most recent ~3 years of 1m bars (≈2023-09 to 2026-09), ≈292k RTH 1m bars per
   symbol. Exact fetched ranges are recorded in each result's `data_lineage`.
+- **Session completeness (data hygiene, added block 1):** a session is used only if it is
+  **complete** — its bars span from the 09:30 ET open bar to the calendar close bar (16:00 ET, or
+  13:00 ET on an early-close day). The close is taken from the market calendar
+  (`lib.market_calendar.session_bounds`), **never** inferred from the last bar that happens to be
+  present, so a truncated pull (a first session that starts mid-morning, a last session that ends
+  before the close) is **discarded**, not mistaken for a full day. Early closes are handled by the
+  calendar. Internal missing minutes are detected and reported as data-quality gaps but do not, on
+  their own, disqualify a session. Both symbols are then reduced to the sessions complete for
+  **both**, so SPY and QQQ run on exactly the same sessions. Counts of complete / incomplete /
+  discarded sessions and the final session range are recorded in each result's
+  `session_accounting`.
 
 ## Execution contract (all intraday experiments)
 
@@ -52,16 +63,39 @@ sweep (frictionless → stress) is reported for robustness, not optimization.
 - **Rule:** `r_first30 = close(09:30–10:00) / prior_session_close − 1`. If `r_first30 > 0`, be long
   during the last half hour (decision on the second-to-last bar, entry at the last bar's open,
   forced exit at the close). Sign-based; **no threshold**.
-- **Deviation (documented):** the short leg (`r_first30 < 0` → short) is **not** tradeable in this
-  long-only engine and is skipped. This is a known limitation, not a tuning choice.
+- **Two preregistered variants, reported separately:**
+  - `market_intraday_momentum_30m` (**long-only**): only the positive-morning leg trades; the
+    short leg is skipped. Retained as the earlier experiment, unchanged.
+  - `market_intraday_momentum_30m_long_short` (**faithful replication**, added block 2): the
+    **same** `_r_first30` signal, but the last-half-hour position takes the **sign** —
+    `r_first30 > 0` → long, `r_first30 < 0` → **short**, close at the session end. Shorting is
+    enabled in the research engine only (`allow_short`); costs apply symmetrically to both legs.
+    This is the more faithful Gao et al. replication. The negative-morning leg is no longer a
+    documented deviation but a traded leg, so the long-only vs long-short comparison shows whether
+    dropping it destroyed the original effect.
 
-## Batch D — baselines (measured, not validated)
+## Batch D — baselines and ablations (measured, not validated)
 
-`smart_technical` (1m), `intraday_momentum_5m` (5m), `hourly_trend` (1h) are pre-existing baselines
-run for reference on the same SPY/QQQ data. They are **not** intraday-contract strategies (they may
-hold overnight) and are **not** treated as validated. `smart_technical` is measured on a documented
-recent window (its O(history²) indicator stack makes a 3-year 1m pass ≈40 min); this is a baseline,
-not a hypothesis.
+Pre-existing baselines run for reference on the same SPY/QQQ complete-session data:
+`smart_technical` (1m), `intraday_momentum_5m` (5m), `hourly_trend` (1h). They are **not**
+intraday-contract strategies (they may hold overnight) and are **not** treated as validated.
+
+- **`smart_technical` now runs the FULL window** (added block 4). Its MACD was reimplemented from
+  O(history²) to O(history) in a single forward pass that is mathematically identical
+  (proven bit-for-bit against the brute-force oracle in `tests/test_smart_technical_equiv.py`), so
+  the earlier truncation to a recent window is removed and it is measured on the same ~3-year
+  sample as everything else. The strategy maths is unchanged.
+- **`hourly_trend_intraday` (1h, ablation, added block 3):** EXACTLY the `hourly_trend` signal and
+  parameters (SMA20/SMA50), but under the intraday no-overnight contract — RTH only, next-bar-open
+  execution, an opposing SELL crossover closes the long, forced flatten at the session close. No
+  SMA/threshold is re-tuned. Purpose: isolate how much of `hourly_trend`'s result comes from market
+  hours versus overnight exposure (`hourly_trend` vs `hourly_trend_intraday`).
+- **`intraday_momentum_15m` (15m, EXPLORATORY, added block 5):** a straight temporal translation of
+  the `intraday_momentum_5m` baseline that preserves the same real-time horizons
+  (SMA 20→7 bars, RSI 14→5 bars, the ~15-min rising reference → 1 bar; cooldown/expiry kept as
+  wall-clock minutes). It is **not** a new hypothesis and its result is **not** used to claim
+  validation or to pick parameters — it exists to demonstrate the system runs a real strategy end
+  to end at 15m.
 
 ## Success criteria (item 12), fixed in advance
 

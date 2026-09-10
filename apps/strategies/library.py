@@ -12,9 +12,12 @@ each one declares its timeframe/lookback and the engine routes the right bars to
 
 Intraday research line (intraday=True -> run_intraday_account; RTH only, no overnight):
 
-    extreme_reversal_1m            1m   long-only ~1/1000 downside-outlier reversal, 5-bar hold
-    opening_range_breakout_5m      5m   breakout above the 09:30-10:00 range, held to the close
-    market_intraday_momentum_30m   30m  Gao/Han/Zhou 2018: first-half-hour sign -> last-half-hour long
+    extreme_reversal_1m                   1m   long-only ~1/1000 downside-outlier reversal, 5-bar hold
+    opening_range_breakout_5m             5m   breakout above the 09:30-10:00 range, held to the close
+    market_intraday_momentum_30m          30m  Gao et al. 2018 long-only: first-half-hour sign -> long
+    market_intraday_momentum_30m_long_short 30m Gao et al. 2018 FAITHFUL: sign -> long/short (allow_short)
+    hourly_trend_intraday                 1h   hourly_trend signal, no-overnight ablation (intraday)
+    intraday_momentum_15m                 15m  EXPLORATORY temporal translation of intraday_momentum_5m
 
 Select at runtime with ENABLED_STRATEGIES="hourly_trend,daily_trend" (default: all).
 """
@@ -69,13 +72,27 @@ class TechnicalIndicators:
 
     @staticmethod
     def macd(prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple:
-        """Returns (macd_line, signal_line, histogram); (None, None, None) if not enough data."""
+        """Returns (macd_line, signal_line, histogram); (None, None, None) if not enough data.
+
+        O(len) single forward pass. This is mathematically identical to the earlier O(len^2)
+        version that recomputed ema(prices[:i], period) for every i: ema() seeds with the SMA of
+        the first `period` prices (a constant in i) and then applies the recurrence
+        value = alpha*p + (1-alpha)*value, so one running EMA reproduces every prefix value
+        bit-for-bit. Proven against the brute-force reference in tests/test_smart_technical_equiv.py.
+        """
         if len(prices) < slow + signal:
             return None, None, None
-        macd_series = []
-        for i in range(slow, len(prices) + 1):
-            window = prices[:i]
-            macd_series.append(TechnicalIndicators.ema(window, fast) - TechnicalIndicators.ema(window, slow))
+        alpha_f, alpha_s = 2.0 / (fast + 1), 2.0 / (slow + 1)
+        fe = sum(prices[:fast]) / fast
+        for p in prices[fast:slow]:                       # advance fast EMA to the i=slow prefix
+            fe = alpha_f * p + (1 - alpha_f) * fe
+        se = sum(prices[:slow]) / slow                    # slow EMA at i=slow is just its seed
+        macd_series = [fe - se]                            # i = slow
+        for i in range(slow + 1, len(prices) + 1):
+            p = prices[i - 1]
+            fe = alpha_f * p + (1 - alpha_f) * fe
+            se = alpha_s * p + (1 - alpha_s) * se
+            macd_series.append(fe - se)
         macd_line = macd_series[-1]
         signal_line = TechnicalIndicators.ema(macd_series, signal) if len(macd_series) >= signal else None
         hist = macd_line - signal_line if signal_line is not None else None
@@ -515,15 +532,17 @@ class MarketIntradayMomentum30m(Strategy):
     signal_expiry_seconds = 40 * 60
     description = "Gao et al. 2018 market intraday momentum: first-half-hour sign -> last-half-hour long"
 
-    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
+    def _r_first30(self, bars: List[Bar]):
+        """The preregistered Gao et al. signal, evaluated on the second-to-last bar only:
+        r_first30 = close(09:30-10:00) / prior_session_close - 1, or None when it is not the
+        decision bar / there is no prior-session close. Shared verbatim by the long-only and the
+        long-short variants so their signal is identical."""
         bar = bars[-1]
         cur_date = _et_date(bar)
         open_utc, close_utc = session_bounds(cur_date)
-        # Act only on the second-to-last bar of the session (its close = 60 min before the close).
-        decision_start = close_utc - timedelta(minutes=60)
+        decision_start = close_utc - timedelta(minutes=60)   # second-to-last bar of the session
         if bar.timestamp != decision_start:
             return None
-        # Locate this session's first 30m bar and the prior session's last close.
         dates = [_et_date(b) for b in bars]
         try:
             idx_first = dates.index(cur_date)
@@ -535,10 +554,116 @@ class MarketIntradayMomentum30m(Strategy):
         prior_close = float(bars[idx_first - 1].close)
         if prior_close <= 0:
             return None
-        r_first30 = first30_close / prior_close - 1.0
+        return first30_close / prior_close - 1.0
+
+    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
+        r_first30 = self._r_first30(bars)
+        if r_first30 is None:
+            return None
         if r_first30 > 0:                        # long-only: only the positive-morning leg trades
             confidence = float(min(0.85, 0.55 + abs(r_first30) * 20))
             return self.make_signal(symbol, SignalSide.BUY, confidence, bars,
                                     {"rule": "r_first30>0 -> long last half hour",
                                      "r_first30": round(r_first30, 5)})
         return None
+
+
+@register
+class MarketIntradayMomentum30mLongShort(MarketIntradayMomentum30m):
+    """PREREGISTERED. FAITHFUL replication of Gao, Han, Li & Zhou (2018): the last-half-hour
+    position takes the SIGN of the first-half-hour return -- LONG if positive, SHORT if negative --
+    and closes at the session end. This differs from `market_intraday_momentum_30m` (long-only)
+    ONLY in trading the short leg; the signal `_r_first30` is inherited verbatim, so the two are
+    the same hypothesis with and without the negative-morning leg. Shorting is enabled in the
+    research engine only (`allow_short`); costs apply symmetrically to both legs.
+
+    Entry at the last bar's open (15:30 ET), forced exit at its close (16:00 ET). SPY primary,
+    QQQ secondary. This is the more faithful replication; the long-only sibling is retained as the
+    prior experiment. No threshold: the sign alone decides direction.
+    """
+    name = "market_intraday_momentum_30m_long_short"
+    allow_short = True
+    description = "Gao et al. 2018 FAITHFUL: first-half-hour sign -> last-half-hour long/short"
+
+    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
+        r_first30 = self._r_first30(bars)
+        if r_first30 is None:
+            return None
+        confidence = float(min(0.85, 0.55 + abs(r_first30) * 20))
+        if r_first30 > 0:
+            return self.make_signal(symbol, SignalSide.BUY, confidence, bars,
+                                    {"rule": "r_first30>0 -> long last half hour",
+                                     "r_first30": round(r_first30, 5)})
+        if r_first30 < 0:
+            return self.make_signal(symbol, SignalSide.SELL, confidence, bars,
+                                    {"rule": "r_first30<0 -> short last half hour",
+                                     "r_first30": round(r_first30, 5)})
+        return None                              # exactly-zero morning: no position (as in the paper)
+
+
+@register
+class HourlyTrendIntraday(HourlyTrendStrategy):
+    """ABLATION of `hourly_trend`: EXACTLY the same signal rule and parameters (SMA20/SMA50 on 1h
+    bars), but run under the intraday contract -- RTH only, next-bar-open execution, an opposing
+    SELL crossover closes the long, and any position is force-flattened at the session close (NO
+    overnight). Nothing else changes: no SMA/threshold is re-tuned.
+
+    Purpose: `hourly_trend` (the baseline) may hold overnight, so its result mixes in-session and
+    overnight exposure. Comparing the two isolates how much of the baseline's return actually comes
+    from the market hours versus from carrying the position overnight. Long/flat like the baseline
+    (a SELL while flat is not shorted here).
+    """
+    name = "hourly_trend_intraday"
+    intraday = True
+    exit_at_session_close = True
+    signal_driven_exit = True          # a SELL crossover closes the long, mirroring the baseline exit
+    max_holding_bars = None            # no fixed time exit; SELL crossover or session close exits
+    description = "hourly_trend signal under the intraday no-overnight contract (overnight ablation)"
+
+
+@register
+class IntradayMomentum15m(IntradayMomentum5m):
+    """EXPLORATORY 15-minute variant of the `intraday_momentum_5m` baseline (spec item 5). It is
+    a straight TEMPORAL translation of the 5m rule, chosen to preserve the same real-time horizons
+    in minutes, NOT a new hypothesis and NOT tuned against results -- it exists to demonstrate the
+    system runs a real strategy end to end at 15m.
+
+    5m -> 15m conversion (each lookback measured in 5m BARS is converted to minutes, then to 15m
+    bars = round(bars_5m * 5 / 15), floored at 1):
+        lookback_bars 30 (150 min)  -> 10 bars (150 min, exact)
+        SMA period    20 (100 min)  ->  7 bars (105 min ~ 100)
+        RSI period    14 ( 70 min)  ->  5 bars ( 75 min ~ 70)
+        rising ref  closes[-4] (~20 min back) -> closes[-2] (15 min back; round(4/3)=1 bar)
+        cooldown 30 min, signal_expiry 10 min: kept as WALL-CLOCK minutes (already time-based).
+    RSI bands (50-70 / 30-50), the rising condition, and the confidence formula are unchanged
+    (they are not time-scaled). One 15m bar spans 15 minutes; horizons are preserved to the bar.
+    """
+    name = "intraday_momentum_15m"
+    timeframe = TimeFrame.FIFTEEN_MINUTE
+    lookback_bars = 10
+    cooldown_seconds = 30 * 60
+    signal_expiry_seconds = 10 * 60
+    _sma_period = 7
+    _rsi_period = 5
+    _rising_lookback = 1               # closes[-2], i.e. 1 bar (15 min) back ~ the 5m 15-min ref
+    description = "EXPLORATORY 15m temporal translation of intraday_momentum_5m (same real horizons)"
+
+    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
+        closes = [float(b.close) for b in bars]
+        sma = TechnicalIndicators.sma(closes, self._sma_period)
+        rsi_now = TechnicalIndicators.rsi(closes, self._rsi_period)
+        rsi_prev = TechnicalIndicators.rsi(closes[:-1], self._rsi_period)
+        if None in (sma, rsi_now, rsi_prev) or len(closes) <= self._rising_lookback:
+            return None
+        price = closes[-1]
+        rising = price > closes[-1 - self._rising_lookback]
+        if price > sma and 50 <= rsi_now <= 70 and rsi_now > rsi_prev and rising:
+            confidence = 0.55 + min(0.25, (rsi_now - 50) / 80)
+            side = SignalSide.BUY
+        elif price < sma and 30 <= rsi_now <= 50 and rsi_now < rsi_prev and not rising:
+            confidence = 0.55 + min(0.25, (50 - rsi_now) / 80)
+            side = SignalSide.SELL
+        else:
+            return None
+        return self.make_signal(symbol, side, confidence, bars, {"sma": sma, "rsi": rsi_now,
+                                "translated_from": "intraday_momentum_5m"})
