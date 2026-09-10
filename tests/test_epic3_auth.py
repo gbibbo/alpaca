@@ -399,3 +399,34 @@ class TestTokenTypeSeparation:
             assert decode_token(a, expected_type="refresh") is None
         finally:
             USERS_DB.pop("rt_user", None)
+
+
+class TestAuthPersistence:
+    """Optional on-disk persistence (AUTH_DB_PATH); off by default."""
+
+    def test_users_survive_reload(self, tmp_path, monkeypatch):
+        import lib.auth as auth
+        db = tmp_path / "auth_db.json"
+        monkeypatch.setenv("AUTH_DB_PATH", str(db))
+        auth.USERS_DB.pop("persist_user", None)
+        auth._auth_db_loaded = False
+        auth.create_user("persist_user", "p@x.com", "pw", auth.UserRole.TRADER)
+        assert db.exists()
+        # Simulate a restart: drop the in-memory copy and reload from disk.
+        auth.USERS_DB.pop("persist_user", None)
+        auth._auth_db_loaded = False
+        auth._load_db()
+        assert "persist_user" in auth.USERS_DB
+        u = auth.USERS_DB["persist_user"]
+        assert u.role == auth.UserRole.TRADER
+        assert auth.verify_password("pw", u.hashed_password)
+        auth.USERS_DB.pop("persist_user", None)
+        auth._auth_db_loaded = False
+
+    def test_no_path_means_no_file(self, tmp_path, monkeypatch):
+        import lib.auth as auth
+        monkeypatch.delenv("AUTH_DB_PATH", raising=False)
+        auth._auth_db_loaded = False
+        auth.create_user("mem_only_user", "m@x.com", "pw", auth.UserRole.VIEWER)
+        assert not list(tmp_path.glob("*.json"))
+        auth.USERS_DB.pop("mem_only_user", None)

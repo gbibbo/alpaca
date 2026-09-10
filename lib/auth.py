@@ -9,8 +9,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from enum import Enum
 import os
+import json
 import secrets
 import hashlib
+import logging
+
+_auth_log = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 from jose import JWTError, jwt
@@ -246,11 +250,13 @@ USERS_DB: dict[str, UserInDB] = {}
 
 
 def _init_default_users():
-    """No shipped passwords. Bootstrap only from explicit configuration."""
+    """No shipped passwords. Load any persisted users, then bootstrap admin from config."""
+    _load_db()
     password = os.getenv('AUTH_ADMIN_PASSWORD')
     if password and 'admin' not in USERS_DB:
         USERS_DB['admin'] = UserInDB(username='admin', email='admin@localhost', role=UserRole.ADMIN,
                                      hashed_password=get_password_hash(password))
+        _save_db()
 
 # In-memory API keys database
 API_KEYS_DB: dict[str, APIKey] = {}
@@ -297,6 +303,52 @@ def reset_login_throttle() -> None:
     """Clear all throttle state (tests)."""
     _login_failures.clear()
     _login_locked_until.clear()
+
+
+# --- Optional on-disk persistence -------------------------------------------
+# Off by default (pure in-memory, so tests are unaffected). Set AUTH_DB_PATH to a writable
+# JSON file to survive restarts. Only already-hashed passwords / key hashes are stored.
+def _auth_db_path() -> Optional[str]:
+    return os.getenv("AUTH_DB_PATH") or None
+
+
+_auth_db_loaded = False
+
+
+def _load_db() -> None:
+    global _auth_db_loaded
+    path = _auth_db_path()
+    if not path or _auth_db_loaded:
+        return
+    _auth_db_loaded = True  # attempt once; a missing file is fine (first run)
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        for username, record in data.get("users", {}).items():
+            USERS_DB.setdefault(username, UserInDB(**record))
+        for key_id, record in data.get("api_keys", {}).items():
+            API_KEYS_DB.setdefault(key_id, APIKey(**record))
+    except Exception as exc:  # never let a bad file break auth
+        _auth_log.warning("Could not load auth DB from %s: %s", path, exc)
+
+
+def _save_db() -> None:
+    path = _auth_db_path()
+    if not path:
+        return
+    try:
+        payload = {
+            "users": {u: v.model_dump(mode="json") for u, v in USERS_DB.items()},
+            "api_keys": {k: v.model_dump(mode="json") for k, v in API_KEYS_DB.items()},
+        }
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)  # atomic swap
+    except Exception as exc:
+        _auth_log.warning("Could not persist auth DB to %s: %s", path, exc)
 
 
 def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
@@ -353,6 +405,7 @@ def create_user(
     )
 
     USERS_DB[username] = user
+    _save_db()
     return user
 
 
@@ -384,6 +437,7 @@ def create_api_key_for_client(
     )
 
     API_KEYS_DB[key_id] = api_key_obj
+    _save_db()
     return api_key_obj, api_key
 
 
@@ -391,6 +445,7 @@ def revoke_api_key(key_id: str) -> bool:
     """Revoke (disable) an API key."""
     if key_id in API_KEYS_DB:
         API_KEYS_DB[key_id].disabled = True
+        _save_db()
         return True
     return False
 
