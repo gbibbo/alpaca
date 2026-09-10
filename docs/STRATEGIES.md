@@ -82,6 +82,50 @@ Select what runs with `ENABLED_STRATEGIES=hourly_trend,daily_trend` (default: al
 | `BUS_BACKEND` | `streams` in `.env` | Durable consumer groups; `pubsub` drops messages published before a consumer is up |
 | `ALLOWED_SIGNAL_SOURCES` | all registered strategies + `manual_api` | Override to whitelist explicitly |
 
-## Simulator
+## Measuring a strategy: the isolated research engine
 
-`apps/simulator/main.py --timeframe 1Hour` now labels bars as `1h` (previously anything but `*Min` became `1d`), and `--csv` bars take the same `--timeframe` label. Replays of 1m data do **not** pass through the resampler; to test a 5m/1h strategy end-to-end, replay 5m/1h data directly (`--timeframe 5Min`).
+This is the supported way to measure a strategy before risking anything. `lib/backtest.py`
+(`run_backtest`) is a self-contained long-only engine with **no message bus and no broker**.
+It never sends an order. `TRADING_MODE=backtest` (the default, see below) disables every
+broker path in the whole system.
+
+How it models execution (declared in the result JSON under `assumptions`):
+- Decisions use **closed** bars; a decision on a bar is actionable at that bar's close
+  (`available_at`), and fills happen at the **next** bar's open with adverse slippage and
+  proportional commission.
+- Volume-participation cap per bar; a triggered stop/target becomes a resting market exit that
+  completes across later bars if volume caps a fill; stop wins if stop and target are both
+  touched in one bar.
+- One base timeframe per run (no auto-resampling); each strategy gets an **independent**
+  account, plus `cash` and `buy_and_hold` benchmarks.
+- Metrics: return, CAGR, max drawdown and its duration, volatility, Sharpe, Sortino, average
+  exposure, win rate, expectancy, profit factor, average win/loss. Benchmarks act from bar 1
+  while strategies wait for their lookback, so compare each account's `first_fill_timestamp`
+  before ranking. A single in-sample pass is **not** predictive evidence (no walk-forward /
+  out-of-sample split yet).
+
+CLI (CSV only; `data/sample/TEST.csv` is synthetic):
+
+```
+python apps/simulator/main.py --symbols TEST --start 2024-01-01 --end 2026-01-01 \
+  --csv data/sample --timeframe 1Day --strategies daily_trend,buy_and_hold \
+  --initial-cash 100000 --output out/run.json
+```
+
+API (auth-gated research service): `POST /backtest/jobs` (body with `csv_dir`, `symbols`,
+`timeframe`, `strategies`, `initial_cash`, optional `risk_params`) then `/start`, poll
+`/backtest/jobs/{id}`, read `/results`, download `/download`. The API runs the CLI as a
+subprocess; results are validated before being marked complete.
+
+### TRADING_MODE
+
+| Mode | Meaning |
+|---|---|
+| `backtest` (default) | Isolated engine only. API starts without Redis; operational routes (`/portfolio`, …) return 503; `lib/execution_safety.verify_mode` and the legacy `HistoricalSimulator` bus replay refuse to run. |
+| `paper` | Requires a paper Alpaca account. |
+| `live` | Requires `enable_live_trading` and a non-paper account. Not certified. |
+
+### Legacy live-bus replay
+
+`HistoricalSimulator` (the old `apps/simulator/main.py` class that published bars to the shared
+bus) is disabled in backtest mode. It is not the measurement path; use the isolated engine above.

@@ -83,6 +83,15 @@ The previous public README was accidentally replaced with unrelated Qwen/VAD con
                     └─────────────────┘    └─────────────────┘
 ```
 
+## Backtesting
+
+Strategies are measured in an **isolated research engine** (`lib/backtest.py`) that uses no
+message bus and no broker and never sends an order. `TRADING_MODE=backtest` is the default and
+disables every broker path. See `docs/QUICK_START.md` and `docs/STRATEGIES.md` for the CLI, the
+auth-gated research API, the execution model, and how to add a strategy. Backtest results are
+hypothetical and not certified for real-money trading; see `docs/AUDIT_STATUS.md` for the
+current backlog and limitations.
+
 ## System Components
 
 ### Data Ingestor

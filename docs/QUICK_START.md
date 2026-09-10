@@ -80,58 +80,52 @@ Expected output:
 
 ## 3. First Backtest (3 minutes)
 
-Run your first backtest to see the system in action:
+Backtests run in the **isolated research engine** (`lib/backtest.py`): no message bus, no
+broker, no orders sent. `TRADING_MODE=backtest` is the default. See `docs/STRATEGIES.md` for
+the execution model and how to add your own strategy.
 
-### Option A: Simple Backtest
+### Command line (CSV input)
+
 ```bash
-# Run GOOGL backtest with default settings
-make backtest-googl
+# data/sample/TEST.csv is a synthetic fixture shipped for validation
+python apps/simulator/main.py --symbols TEST --start 2024-01-01 --end 2026-01-01 \
+  --csv data/sample --timeframe 1Day --strategies daily_trend,buy_and_hold \
+  --initial-cash 100000 --output out/run.json
 ```
 
-Results will be saved to:
-- `out/GOOGL.png` - Performance chart
-- `out/GOOGL.json` - Detailed metrics
-- `out/GOOGL.txt` - Console output
+`--strategies` accepts any registered strategy (see `apps/strategies/library.py`) plus the
+`cash` and `buy_and_hold` benchmarks. Use `--risk-params '{"stop_loss_pct":0.03}'` to override
+sizing/risk. One base timeframe per run; supply bars of that timeframe.
 
-### Option B: Backtest with Persistence
+### Research API (auth-gated)
+
 ```bash
-# Run backtest with full data persistence
-make backtest-persist
-```
-
-Results will be saved to:
-- `out/run_<timestamp>_<uuid>/backtest.db` - SQLite database
-- `out/run_<timestamp>_<uuid>/summary.json` - Summary metrics
-- `out/run_<timestamp>_<uuid>/data/*.csv` - CSV exports
-
-### Option C: Custom Symbol
-```bash
-# Backtest a different symbol
-make backtest-custom SYMBOL=AAPL START_DATE=2023-01-01
+export AUTH_ADMIN_PASSWORD='choose-a-password'
+python -m uvicorn apps.api.main:app --host 127.0.0.1 --port 8000
+# then: POST /api/auth/token -> POST /backtest/jobs -> /start -> poll -> /results -> /download
 ```
 
 ## 4. Understanding the Results
 
-After running a backtest, check the output files:
+The result JSON has one entry per account under `accounts` (your strategies plus `cash` and
+`buy_and_hold`). Each carries `metrics`, `equity_curve`, `fills`, `signals`, `rejections`,
+`first_fill_timestamp`, and `final_portfolio`. Top level includes `data_sha256` /
+`result_sha256` for reproducibility and an `assumptions` list stating the engine's limits.
 
-### Performance Chart (`out/GOOGL.png`)
-The chart shows:
-- Portfolio equity curve over time
-- Entry and exit points
-- Drawdown periods
-- Final performance
-
-### Metrics (`out/GOOGL.json`)
-Key metrics include:
 ```json
 {
-  "total_return": 15.5,
-  "sharpe_ratio": 1.2,
-  "max_drawdown": -5.3,
-  "win_rate": 0.65,
-  "total_trades": 42
+  "return_pct": 10.75,
+  "max_drawdown_pct": 6.23,
+  "max_drawdown_duration_days": 84.0,
+  "sharpe": 1.2,
+  "avg_exposure_pct": 99.6,
+  "trades": {"total": 42, "win_rate": 65.0, "profit_factor": 1.8, "avg_win": 120.0, "avg_loss": -70.0}
 }
 ```
+
+Compare accounts over the same window: benchmarks act from the first bar while a strategy waits
+for its lookback, so check each account's `first_fill_timestamp`. A single in-sample run is not
+predictive evidence.
 
 ## 5. Testing Comprehensive Features
 
