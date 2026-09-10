@@ -21,6 +21,9 @@ from lib.models import Bar, TimeFrame
 from lib.portfolio import Portfolio, D
 from lib.strategy_base import create_strategies
 from lib.timeframes import parse_timeframe, timeframe_seconds
+from lib.market_calendar import session_close, is_trading_day
+
+NY = ZoneInfo("America/New_York")
 
 
 class ResearchConfig(BaseModel):
@@ -49,16 +52,35 @@ class ResearchConfig(BaseModel):
         return self
 
 
+def session_date_of(bar):
+    """Trading-session date a bar belongs to (year-agnostic, one clear contract).
+
+    Daily bars stamped at 00:00 UTC (date-only CSV) denote that calendar session directly, so
+    they are NOT shifted back a day by a UTC->NY conversion. Any bar carrying an intraday time
+    is placed by its New York local date.
+    """
+    ts = bar.timestamp if bar.timestamp.tzinfo else bar.timestamp.replace(tzinfo=timezone.utc)
+    if bar.timeframe == TimeFrame.DAY and ts.hour == 0 and ts.minute == 0:
+        return ts.date()
+    return ts.astimezone(NY).date()
+
+
 def available_at(bar):
+    """When a decision made on this (closed) bar becomes actionable: the bar's own close.
+
+    Daily bars resolve to the session close in New York (13:00 on early-close days), rolled to
+    the next trading day if the dataset carries a non-session date. Intraday bars resolve to the
+    bar-interval end.
+    """
+    ts = bar.timestamp if bar.timestamp.tzinfo else bar.timestamp.replace(tzinfo=timezone.utc)
     if bar.timeframe == TimeFrame.DAY:
-        local = bar.timestamp.astimezone(ZoneInfo("America/New_York"))
-        # Date-only CSV daily bars are explicitly interpreted as the session date.
-        if bar.timestamp.hour == 0 and bar.timestamp.minute == 0:
-            local = bar.timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
-        from apps.risk_manager.market_hours import MarketCalendar
-        close = MarketCalendar().get_market_hours(local)[1]
-        return local.replace(hour=close.hour, minute=close.minute, second=0, microsecond=0).astimezone(timezone.utc)
-    return bar.timestamp + timedelta(seconds=timeframe_seconds(bar.timeframe))
+        d = session_date_of(bar)
+        for _ in range(7):
+            if is_trading_day(d):
+                break
+            d = d + timedelta(days=1)
+        return datetime.combine(d, session_close(d), tzinfo=NY).astimezone(timezone.utc)
+    return ts + timedelta(seconds=timeframe_seconds(bar.timeframe))
 
 
 def load_csv(directory, symbols, timeframe, start=None, end=None):
@@ -109,6 +131,14 @@ def performance(ledger, curve, config):
     for value in values:
         peak = max(peak, value)
         drawdown = max(drawdown, 1 - value / peak)
+    # Longest stretch below a prior equity peak (underwater duration), and exposure profile.
+    dd_seconds, peak_dur, peak_ts = 0.0, config.initial_cash, curve[0]["timestamp"]
+    for row in curve:
+        if row["equity"] >= peak_dur:
+            peak_dur, peak_ts = row["equity"], row["timestamp"]
+        else:
+            dd_seconds = max(dd_seconds, (datetime.fromisoformat(row["timestamp"]) - datetime.fromisoformat(peak_ts)).total_seconds())
+    exposures = [row["positions_value"] / row["equity"] for row in curve if row["equity"] > 0]
     daily = {}
     for row in curve:
         daily[row["timestamp"][:10]] = row["equity"]
@@ -123,6 +153,9 @@ def performance(ledger, curve, config):
     days = (datetime.fromisoformat(curve[-1]["timestamp"]) - datetime.fromisoformat(curve[0]["timestamp"])).total_seconds() / 86400
     ratio = float(ledger.equity / ledger.initial_cash)
     return {"return_pct": (ratio - 1) * 100, "max_drawdown_pct": drawdown * 100,
+            "max_drawdown_duration_days": dd_seconds / 86400,
+            "avg_exposure_pct": mean(exposures) * 100 if exposures else None,
+            "max_exposure_pct": max(exposures) * 100 if exposures else None,
             "cagr_pct": (ratio ** (365.25 / days) - 1) * 100 if days >= 365 and ratio > 0 else None,
             "volatility_annualized": vol * math.sqrt(252) if vol else None,
             "sharpe": mean(excess) / vol * math.sqrt(252) if vol else None,
@@ -147,14 +180,14 @@ def run_backtest(bars, config):
             if strategy.timeframe != ordered[0].timeframe:
                 raise ValueError(f"{name} requires {strategy.timeframe.value}; supply matching closed bars")
         ledger = Portfolio(config.initial_cash)
-        history, cooldown, pending, brackets = defaultdict(list), {}, {}, {}
+        history, cooldown, pending, brackets, armed_exit = defaultdict(list), {}, {}, {}, {}
         curve, signals, rejections = [], [], []
         day, day_start, day_halted = None, ledger.equity, False
         symbols = sorted({b.symbol for b in bars})
         purchased = set()
         for ts, batch in groupby(ordered, key=lambda b: b.timestamp):
             batch = list(batch)
-            session = ts.astimezone(ZoneInfo("America/New_York")).date()
+            session = session_date_of(batch[0])
             if session != day:
                 day, day_start, day_halted = session, ledger.equity, False
             for bar in batch:
@@ -196,17 +229,31 @@ def run_backtest(bars, config):
                                 pending[sym] = {**order, "quantity": wanted - qty}
                 elif order:
                     pending[sym] = order
-                # Protective exits, including entry-bar risk; adverse tie breaking.
+                # Protective exits, including entry-bar risk. A triggered stop/target becomes a
+                # resting market exit: if volume caps the fill the remainder stays armed and
+                # completes on later bars at their open (gap-through), rather than being re-tested
+                # against a later bar that may no longer touch the level.
                 held = ledger.positions.get(sym, D(0))
-                if held and sym in brackets:
-                    stop, target = brackets[sym]
-                    exit_price = min(bar.open, stop) if bar.low <= stop else (target if bar.high >= target else None)
-                    if exit_price is not None:
+                basis = None
+                if held > 0:
+                    if sym in armed_exit:
+                        basis = bar.open
+                    elif sym in brackets:
+                        stop, target = brackets[sym]
+                        if bar.low <= stop:
+                            basis, armed_exit[sym] = min(bar.open, stop), "stop"
+                        elif bar.high >= target:
+                            basis, armed_exit[sym] = max(bar.open, target), "target"
+                    if basis is not None:
                         qty = min(int(held), volume_left)
                         if qty:
-                            price = exit_price * (1 - D(config.slippage_bps / 10000))
+                            price = basis * (1 - D(config.slippage_bps / 10000))
                             ledger.fill(f"{name}-{len(ledger.fills)}", sym, "SELL", qty, price,
                                         D(qty) * price * D(config.commission_bps / 10000), available_at(bar).isoformat())
+                            volume_left -= qty
+                        if ledger.positions.get(sym, D(0)) <= 0:
+                            armed_exit.pop(sym, None)
+                            brackets.pop(sym, None)
                         pending.pop(sym, None)
                 ledger.mark(sym, bar.close)
             day_halted |= ledger.equity <= day_start * (1 - D(config.max_daily_loss))
@@ -239,6 +286,8 @@ def run_backtest(bars, config):
         accounts[name] = {"metrics": performance(ledger, curve, config), "equity_curve": curve,
                           "fills": ledger.fills, "signals": signals, "rejections": rejections,
                           "final_portfolio": ledger.snapshot(curve[-1]["timestamp"]),
+                          "warmup_bars": strategy.lookback_bars if strategy else 0,
+                          "first_fill_timestamp": ledger.fills[0]["timestamp"] if ledger.fills else None,
                           "unfilled_at_end": len(pending)}
     payload = {"schema_version": 1, "mode": "backtest", "config": config.model_dump(),
                "data_sha256": data_hash, "bars_count": len(ordered), "accounts": accounts,
@@ -247,6 +296,10 @@ def run_backtest(bars, config):
                                "Volume participation caps; stop first if both stop/target touched; no forced final liquidation",
                                "Prices supplied by dataset; no separate dividends/taxes or corporate action ledger",
                                "No survivorship correction; validate the historical universe externally",
+                               "Benchmarks (cash, buy_and_hold) act from the first bar while strategies wait for "
+                               "their lookback, so per-account returns may span different windows; compare "
+                               "first_fill_timestamp before ranking",
+                               "No walk-forward or out-of-sample split; a single in-sample pass is not predictive evidence",
                                "OHLC cannot establish intrabar execution sequence; results are hypothetical"]}
     payload["result_sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return payload

@@ -90,22 +90,31 @@ class MarketCalendar:
         logger.info("Alpaca Clock API connected")
 
     def is_holiday(self, date: datetime) -> Tuple[bool, Optional[str]]:
-        """Check if date is a market holiday"""
+        """Check if date is a market holiday (curated table first, then computed for any year)"""
         date_key = date.strftime("%Y-%m-%d")
 
         if date_key in self.MARKET_HOLIDAYS:
             holiday_name = self.MARKET_HOLIDAYS[date_key]
             return True, holiday_name
 
+        # Year-agnostic fallback so the calendar is not limited to the curated years.
+        from lib import market_calendar
+        if market_calendar.is_holiday(date):
+            return True, "Market holiday (computed)"
+
         return False, None
 
     def is_early_close(self, date: datetime) -> Tuple[bool, Optional[str]]:
-        """Check if date is an early close day (1:00 PM ET)"""
+        """Check if date is an early close day (1:00 PM ET); computed fallback for any year"""
         date_key = date.strftime("%Y-%m-%d")
 
         if date_key in self.EARLY_CLOSE_DAYS:
             reason = self.EARLY_CLOSE_DAYS[date_key]
             return True, reason
+
+        from lib import market_calendar
+        if market_calendar.is_early_close(date):
+            return True, "Early close (computed)"
 
         return False, None
 

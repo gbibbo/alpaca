@@ -82,9 +82,12 @@ class Portfolio:
 
     def trade_stats(self):
         pnls = [trade["pnl"] for trade in self.closed_trades]
-        wins = sum(p > 0 for p in pnls)
-        gains, losses = sum(p for p in pnls if p > 0), -sum(p for p in pnls if p < 0)
-        return {"total": len(pnls), "winning": wins, "win_rate": wins / len(pnls) * 100 if pnls else None,
+        wins = [p for p in pnls if p > 0]
+        loss = [p for p in pnls if p < 0]
+        gains, losses = sum(wins), -sum(loss)
+        return {"total": len(pnls), "winning": len(wins), "win_rate": len(wins) / len(pnls) * 100 if pnls else None,
                 "expectancy": sum(pnls) / len(pnls) if pnls else None,
+                "avg_win": gains / len(wins) if wins else None,
+                "avg_loss": -losses / len(loss) if loss else None,
                 "profit_factor": gains / losses if losses else None,
                 "definition": "closing lots, net of allocated entry and exit fees"}
