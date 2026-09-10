@@ -1083,49 +1083,10 @@ async def get_backtest_stats():
 
     return stats
 
-@app.post("/backtest/quick", dependencies=[Depends(require_permission(Permission.WRITE_BACKTEST))])
-async def quick_backtest(
-    symbols: str = "AAPL,GOOGL",
-    days: int = 30,
-    seed: Optional[int] = None
-):
-    """Create and start a quick backtest for testing"""
-    try:
-        from datetime import date
-
-        end_date = date.today()
-        start_date = end_date - timedelta(days=days)
-
-        config = BacktestRequest(
-            symbols=symbols.split(","),
-            start_date=start_date.isoformat(),
-            end_date=end_date.isoformat(),
-            timeframe="1Day",
-            seed=seed,
-            speed_multiplier=1.0,  # Fast execution
-            strategies=["random_50_50"]
-        )
-
-        job_id = job_manager.create_job(config)
-
-        # Start immediately
-        success = await job_manager.start_job(job_id)
-
-        return {
-            "job_id": job_id,
-            "status": "started" if success else "failed_to_start",
-            "config": {
-                "symbols": config.symbols,
-                "date_range": f"{start_date} to {end_date}",
-                "seed": seed
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to create quick backtest: {e}")
-        if METRICS.get('custom_errors'):
-            METRICS['custom_errors'].labels(service='api', error_type='quick_backtest').inc()
-        raise HTTPException(status_code=500, detail=str(e))
+# NOTE: the legacy POST /backtest/quick endpoint was retired. It predated the isolated
+# CSV-only research engine: it fabricated a live date range with no csv_dir and reported
+# "started" for a job that could only fail. Create jobs via POST /backtest/jobs with an
+# explicit csv_dir instead.
 
 if __name__ == "__main__":
     import uvicorn

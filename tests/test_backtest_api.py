@@ -99,28 +99,6 @@ def test_start_job(job_id):
         print(f"❌ Failed to start job: {response.status_code} - {response.text}")
         return False
 
-def test_quick_backtest():
-    """Test the quick backtest endpoint"""
-    print("\n⚡ Testing quick backtest...")
-
-    params = {
-        "symbols": "AAPL",
-        "days": 7,
-        "seed": 123
-    }
-
-    response = requests.post(f"{BASE_URL}/backtest/quick", params=params)
-
-    if response.status_code == 200:
-        data = response.json()
-        print(f"✅ Quick backtest created: {data['job_id']}")
-        print(f"   Status: {data['status']}")
-        print(f"   Config: {data['config']}")
-        return data['job_id']
-    else:
-        print(f"❌ Failed to create quick backtest: {response.status_code} - {response.text}")
-        return None
-
 def test_backtest_stats():
     """Test backtest statistics"""
     print("\n📊 Testing backtest stats...")
@@ -205,19 +183,12 @@ def main():
     # Test listing jobs
     test_list_jobs()
 
-    # Test quick backtest
-    quick_job_id = test_quick_backtest()
-    if quick_job_id:
-        # Monitor quick job
-        monitor_job(quick_job_id, timeout=45)
-
     # Test stats
     test_backtest_stats()
 
     print("\n🎉 API testing completed!")
     print("\nTo test manually:")
     print(f"  curl {BASE_URL}/backtest/stats")
-    print(f"  curl -X POST {BASE_URL}/backtest/quick?symbols=AAPL&days=5&seed=42")
 
 if __name__ == "__main__":
     main()
