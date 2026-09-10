@@ -24,8 +24,7 @@ def test_backtest_allows_pubsub_fakeredis(monkeypatch):
     from lib.settings import Settings
     import lib.bus as bus
     monkeypatch.setattr(bus, "get_settings", lambda: Settings(_env_file=None, trading_mode="backtest", use_fake_redis=True))
-    b = bus.MessageBus()                       # no raise
-    assert b.backend_type == "pubsub"
+    assert bus.connect_bus() is True           # backtest may use pubsub+fakeredis
 
 
 def test_paper_rejects_fakeredis(monkeypatch):
@@ -36,7 +35,7 @@ def test_paper_rejects_fakeredis(monkeypatch):
     monkeypatch.setenv("BUS_BACKEND", "streams")
     monkeypatch.setattr(bus, "get_settings", lambda: Settings(_env_file=None, trading_mode="paper", use_fake_redis=True))
     with pytest.raises(RuntimeError, match="real Redis"):
-        bus.MessageBus()
+        bus.connect_bus()
 
 
 def test_paper_rejects_pubsub(monkeypatch):
@@ -47,7 +46,7 @@ def test_paper_rejects_pubsub(monkeypatch):
     monkeypatch.setenv("BUS_BACKEND", "pubsub")
     monkeypatch.setattr(bus, "get_settings", lambda: Settings(_env_file=None, trading_mode="paper", use_fake_redis=False))
     with pytest.raises(RuntimeError, match="streams"):
-        bus.MessageBus()
+        bus.connect_bus()
 
 
 if __name__ == "__main__":
