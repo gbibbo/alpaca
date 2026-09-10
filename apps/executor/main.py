@@ -45,6 +45,11 @@ try:
 except Exception:  # pragma: no cover - keeps module importable if alpaca layout changes
     APIError = Exception
 
+class IdempotencyCheckError(RuntimeError):
+    """The broker could not be queried to confirm whether an order already exists. The caller
+    must NOT submit (it might duplicate an existing order); leave the intent pending for retry."""
+
+
 # Alpaca order statuses (lower-case) grouped by lifecycle stage
 OPEN_STATUSES = {"new", "accepted", "pending_new", "accepted_for_bidding", "held", "partially_filled",
                  "pending_cancel", "pending_replace", "calculated", "stopped", "suspended", "done_for_day"}
@@ -558,32 +563,45 @@ class EnhancedAlpacaExecutor:
                 self.rate_manager.failed_calls += 1
                 raise e
     
+    @staticmethod
+    def _is_not_found(err) -> bool:
+        msg = str(err).lower()
+        return getattr(err, "status_code", None) == 404 or "not found" in msg or "does not exist" in msg
+
     async def get_existing_order(self, client_order_id: str):
-        """Look up an order by client_order_id. Returns None when it does not exist (404)."""
+        """Look up an order by client_order_id.
+
+        Returns None ONLY when the broker definitively says the order does not exist (404).
+        On any ambiguous failure (network error, timeout, 5xx after a retry) it RAISES
+        IdempotencyCheckError instead of returning None: the caller must not blindly submit a
+        possibly-duplicate order, so the intent is left pending for retry (fail closed).
+        """
+        def _call():
+            return self.trading_client.get_order_by_client_id(client_order_id)
         try:
             if not self.rate_manager.can_make_trading_call():
                 await asyncio.sleep(self.rate_manager.get_wait_time())
-            order = self.trading_client.get_order_by_client_id(client_order_id)
+            order = _call()
             self.rate_manager.record_trading_call("get_order_by_client_id")
             return order
         except Exception as e:
-            status_code = getattr(e, "status_code", None)
-            msg = str(e).lower()
-            if status_code == 404 or "not found" in msg or "does not exist" in msg:
+            if self._is_not_found(e):
                 return None
-            if status_code == 429 or (isinstance(status_code, int) and status_code >= 500):
-                # Transient broker problem: use the retry path once
+            status_code = getattr(e, "status_code", None)
+            if status_code == 429 or (isinstance(status_code, int) and 500 <= status_code < 600):
+                # Transient broker problem: retry once; a 404 there means "does not exist".
                 try:
                     return await self._execute_with_retry(
-                        operation="get_orders",
-                        func=lambda: self.trading_client.get_order_by_client_id(client_order_id),
-                        description=f"Check existing order {client_order_id}"
-                    )
+                        operation="get_orders", func=_call,
+                        description=f"Check existing order {client_order_id}")
                 except Exception as retry_error:
-                    logger.warning(f"Error checking existing order (continuing with submit): {retry_error}")
-                    return None
-            logger.warning(f"Error checking existing order (continuing with submit): {e}")
-            return None
+                    if self._is_not_found(retry_error):
+                        return None
+                    raise IdempotencyCheckError(
+                        f"Could not verify existing order {client_order_id}: {retry_error}") from retry_error
+            # Ambiguous (network/timeout/unexpected): do not submit, leave the intent pending.
+            raise IdempotencyCheckError(
+                f"Could not verify existing order {client_order_id}: {e}") from e
 
     def is_intent_expired(self, order_intent: OrderIntent) -> bool:
         """Intents carry a valid_until set by the risk manager; never act on stale redeliveries."""

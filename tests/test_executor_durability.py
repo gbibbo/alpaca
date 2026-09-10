@@ -59,3 +59,55 @@ def test_terminal_order_not_pending_after_restart(tmp_path):
     assert "broker2" not in t2.pending_orders
     assert t2.order_fsms["broker2"].current_state == OrderState.FILLED
     t2.db.close()
+
+
+import pytest
+from unittest.mock import Mock, patch
+from lib.models import OrderType
+
+
+@pytest.mark.asyncio
+async def test_get_existing_order_fails_closed_on_network_error(monkeypatch, tmp_path):
+    """A network/ambiguous failure while checking idempotency must NOT lead to a submit."""
+    monkeypatch.setenv("EXECUTOR_JOURNAL", str(tmp_path / "j.sqlite"))
+    monkeypatch.setenv("EXECUTOR_METRICS_PORT", "0")
+    from apps.executor.main import EnhancedAlpacaExecutor, IdempotencyCheckError
+
+    client = Mock()
+    client.get_account = Mock(return_value=Mock(status="ACTIVE", buying_power=100000,
+                                                cash=100000, portfolio_value=100000))
+    client.get_order_by_client_id = Mock(side_effect=ConnectionError("connection reset by peer"))
+    client.submit_order = Mock()
+
+    with patch("apps.executor.main.TradingClient", return_value=client):
+        ex = EnhancedAlpacaExecutor()
+        ex.trading_client = client
+        intent = OrderIntent(symbol="TEST", side=SignalSide.BUY, quantity=Decimal("1"),
+                             order_type=OrderType.MARKET, client_order_id="cid-net",
+                             signal_source="t", price=Decimal("100"))
+
+        with pytest.raises(IdempotencyCheckError):
+            await ex.get_existing_order("cid-net")
+
+        # The whole execution path must propagate (fail closed) and never call submit_order.
+        with pytest.raises(Exception):
+            await ex.execute_order_with_validation(intent)
+        assert client.submit_order.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_existing_order_returns_none_on_404(monkeypatch, tmp_path):
+    """A definitive 'does not exist' is safe to proceed from (returns None)."""
+    monkeypatch.setenv("EXECUTOR_JOURNAL", str(tmp_path / "j2.sqlite"))
+    monkeypatch.setenv("EXECUTOR_METRICS_PORT", "0")
+    from apps.executor.main import EnhancedAlpacaExecutor
+
+    client = Mock()
+    client.get_account = Mock(return_value=Mock(status="ACTIVE", buying_power=100000,
+                                                cash=100000, portfolio_value=100000))
+    client.get_order_by_client_id = Mock(side_effect=Exception("order not found"))
+
+    with patch("apps.executor.main.TradingClient", return_value=client):
+        ex = EnhancedAlpacaExecutor()
+        ex.trading_client = client
+        assert await ex.get_existing_order("missing") is None

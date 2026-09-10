@@ -17,7 +17,7 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 - **pending** — Conservative SELL exits vs. shares reserved by bracket legs (safe cancel/replace before strategic exit).
 - **pending** — Stop: authorized resume endpoint, per-instance/order fresh ACK, race avoidance; don't report "stopped" on a stale ACK.
 - **pending** — Submission lock expiry/multi-executor/ambiguous-broker-response tests.
-- **pending** — `get_existing_order` should distinguish network failure from 404; reconcile terminal existing state before ACK.
+- **done** — `get_existing_order` is now fail-closed: it returns None only on a definitive 404, and raises `IdempotencyCheckError` on any ambiguous failure (network/timeout/5xx after retry) so the intent is left pending instead of risking a duplicate submit. Tested (`tests/test_executor_durability.py`). **Pending**: reconcile a terminal existing order's fills before ACK (currently returns None when it exists-but-unfilled).
 - **pending** — Require Streams/real Redis for durable operation (Pub/Sub still selectable).
 - **pending** — Validate sizing/collar ranges in Settings, not only ResearchConfig.
 
