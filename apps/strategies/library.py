@@ -294,3 +294,43 @@ class TurtleBreakout(Strategy):
             return self.make_signal(symbol, SignalSide.SELL, confidence, bars,
                                     {"rule": "close<10d_low", "exit_level": exit_level, "close": close})
         return None
+
+
+# ---------------------------------------------------------------- 1d (time-series momentum)
+@register
+class TimeSeriesMomentum12M(Strategy):
+    """12-month time-series (absolute) momentum, long or cash. PREREGISTERED baseline.
+
+        R_12m = P_t / P_{t-252} - 1        (252 sessions ~ one year)
+        R_12m > 0  -> BUY (be long)        R_12m <= 0 -> SELL (be flat; never short)
+
+    Evaluated roughly monthly (cooldown 30 days). One hypothesis, one number, one decision:
+    no filters, no indicator stack, and the three parameters below (252 sessions, threshold 0,
+    monthly review) are fixed in advance and must not be tuned by looking at results.
+    Literature: Moskowitz/Ooi/Pedersen 2012 (time-series momentum); Lim/Wang/Yao 2018 (single
+    US stocks, 1927-2017); critiques in Goyal/Jegadeesh 2018 and Huang et al. 2020.
+
+    Measure it PURE first (stop_loss_pct/take_profit_pct = null in the research config): a
+    tight take-profit caps exactly the multi-month trends this thesis relies on.
+    """
+    name = "tsmom_12m_long_only"
+    timeframe = TimeFrame.DAY
+    lookback_sessions = 252          # preregistered
+    threshold = 0.0                  # preregistered
+    lookback_bars = 253              # 252 sessions of return needs 253 closes
+    max_history = 300
+    cooldown_seconds = 30 * 86400    # preregistered: ~monthly review
+    signal_expiry_seconds = 4 * 86400
+    description = "12-month absolute momentum (252 sessions), long or cash, monthly review"
+
+    def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
+        closes = [float(b.close) for b in bars]
+        if len(closes) < self.lookback_sessions + 1:
+            return None
+        momentum_12m = closes[-1] / closes[-(self.lookback_sessions + 1)] - 1.0
+        side = SignalSide.BUY if momentum_12m > self.threshold else SignalSide.SELL
+        return self.make_signal(symbol, side, 1.0, bars, {
+            "momentum_12m": momentum_12m,
+            "lookback_sessions": self.lookback_sessions,
+            "threshold": self.threshold,
+        })

@@ -35,8 +35,11 @@ class ResearchConfig(BaseModel):
     max_portfolio_risk: float = Field(default=.8, gt=0, le=1)
     risk_pct: float = Field(default=.01, gt=0, le=1)
     max_daily_loss: float = Field(default=.05, gt=0, le=1)
-    stop_loss_pct: float = Field(default=.02, gt=0, lt=1)
-    take_profit_pct: float = Field(default=.06, gt=0, lt=10)
+    # Protective exits are OPTIONAL (null disables). A tight take-profit is incompatible with a
+    # trend-following thesis (it caps the very trends the strategy is trying to ride), so
+    # measure a strategy pure first, then ablate by adding protection.
+    stop_loss_pct: float | None = Field(default=.02, gt=0, lt=1)
+    take_profit_pct: float | None = Field(default=.06, gt=0, lt=10)
     slippage_bps: float = Field(default=5, ge=0, le=1000)
     commission_bps: float = Field(default=1, ge=0, le=1000)
     max_volume_participation: float = Field(default=.01, gt=0, le=1)
@@ -258,9 +261,11 @@ def run_backtest(bars, config):
                             fee = D(qty) * price * D(config.commission_bps / 10000)
                             ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat())
                             volume_left -= qty
-                            if side == "BUY" and strategy:
+                            if side == "BUY" and strategy and (config.stop_loss_pct or config.take_profit_pct):
                                 cost = ledger.avg_cost[sym]
-                                brackets[sym] = (cost * (1 - D(config.stop_loss_pct)), cost * (1 + D(config.take_profit_pct)))
+                                brackets[sym] = (
+                                    cost * (1 - D(config.stop_loss_pct)) if config.stop_loss_pct else None,
+                                    cost * (1 + D(config.take_profit_pct)) if config.take_profit_pct else None)
                             if side == "BUY":
                                 purchased.add(sym)
                             if qty < wanted:
@@ -278,9 +283,9 @@ def run_backtest(bars, config):
                         basis = bar.open
                     elif sym in brackets:
                         stop, target = brackets[sym]
-                        if bar.low <= stop:
+                        if stop is not None and bar.low <= stop:
                             basis, armed_exit[sym] = min(bar.open, stop), "stop"
-                        elif bar.high >= target:
+                        elif target is not None and bar.high >= target:
                             basis, armed_exit[sym] = max(bar.open, target), "target"
                     if basis is not None:
                         qty = min(int(held), volume_left)
@@ -311,8 +316,15 @@ def run_backtest(bars, config):
                 if signal and sym not in pending:
                     side = str(getattr(signal.side, "value", signal.side)).upper()
                     if side == "BUY":
-                        budget = ledger.equity * D(config.risk_pct) / (bar.close * D(config.stop_loss_pct))
-                        qty = int(budget) if strategy else int(ledger.equity / len(symbols) / bar.close)
+                        if not strategy:
+                            qty = int(ledger.equity / len(symbols) / bar.close)
+                        elif config.stop_loss_pct:
+                            # Risk-per-trade sizing: risk budget / distance to the stop.
+                            qty = int(ledger.equity * D(config.risk_pct) / (bar.close * D(config.stop_loss_pct)))
+                        else:
+                            # No stop -> "long or cash": size to the target allocation cap. A repeated
+                            # BUY while already at the cap finds no room and does not accumulate.
+                            qty = int(ledger.equity * D(config.max_position_size) / bar.close)
                     else:
                         qty = int(ledger.positions.get(sym, D(0)))
                     if qty > 0:

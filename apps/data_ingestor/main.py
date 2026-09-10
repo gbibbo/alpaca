@@ -10,7 +10,7 @@ by Bar.timeframe.
 
 Env knobs:
   HISTORICAL_DAYS            1m backfill window (default from settings, 7)
-  DAILY_HISTORY_DAYS         daily backfill window in calendar days (default 400 ~ 275 sessions)
+  DAILY_HISTORY_DAYS         daily backfill window in calendar days (default 550 ~ 380 sessions; 12m momentum needs 253)
   RESAMPLE_TIMEFRAMES        comma list derived from 1m (default "5m,1h"; empty disables)
   INGEST_DAILY               "1" (default) to also publish daily bars
   ALPACA_DATA_FEED           iex (default) or sip
@@ -94,7 +94,7 @@ class AlpacaDataIngestor:
 
         # Daily bars
         self.ingest_daily = os.getenv("INGEST_DAILY", "1") == "1"
-        self.daily_history_days = int(os.getenv("DAILY_HISTORY_DAYS", "400"))
+        self.daily_history_days = int(os.getenv("DAILY_HISTORY_DAYS", "550"))
         self.daily_refresh_seconds = int(os.getenv("DAILY_REFRESH_SECONDS", "3600"))
         self._last_daily_refresh = 0.0
 

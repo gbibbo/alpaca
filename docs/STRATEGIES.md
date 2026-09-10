@@ -117,6 +117,42 @@ API (auth-gated research service): `POST /backtest/jobs` (body with `csv_dir`, `
 `/backtest/jobs/{id}`, read `/results`, download `/download`. The API runs the CLI as a
 subprocess; results are validated before being marked complete.
 
+### Research protocol: preregister, measure pure, then ablate
+
+1. **Preregister** the strategy's parameters before looking at results and do not tune them
+   afterwards. Trying enough variants will find a great backtest by accident (Bailey et al.,
+   "The Probability of Backtest Overfitting").
+2. **Measure it pure first**: set `"stop_loss_pct": null, "take_profit_pct": null` in
+   `--risk-params`. Protective exits are optional; a tight take-profit is conceptually
+   incompatible with a trend-following thesis because it caps the very trends the strategy
+   is trying to ride. Without a stop, entries are sized to the `max_position_size` allocation
+   ("long or cash"); a repeated BUY at the cap does not accumulate.
+3. **Ablate**: re-run the identical data/strategy with protection added, and compare. Report both.
+4. **Compare like for like**: benchmarks (`cash`, `buy_and_hold`) act from bar 1 while a
+   strategy waits for its lookback. Read each account's `first_fill_timestamp` and re-run the
+   benchmark over the strategy's active window before ranking. With `walk_forward_folds`,
+   prefer consistency across sub-periods over the headline return.
+5. Mind sample size: a monthly-review strategy over three years makes very few independent
+   decisions; treat its Sharpe and fold statistics as weak evidence.
+
+Suggested lab order (longest horizon and strongest evidence first):
+
+| # | Strategy | Horizon | Note |
+|---|---|---|---|
+| 1 | `tsmom_12m_long_only` | months | **Preregistered**: 252 sessions, threshold 0, monthly review. Long or cash, never short. Time-series (absolute) momentum; fits the per-symbol `analyze(symbol, bars)` contract. |
+| 2 | `turtle_breakout` | weeks | Donchian 20-day high entry / 10-day low exit. |
+| 3 | `daily_trend` | months | SMA50/200 regime + RSI filter. |
+| 4+ | hourly, then 5m/1m | hours/minutes | Only after the above; turnover and costs rise steeply. |
+
+Data: 12-month momentum needs 253 daily closes before its first decision, so backfill at
+least ~550 calendar days (`DAILY_HISTORY_DAYS`, now the default) and always use split/dividend
+**adjusted** bars (`adjustment="all"`); unadjusted data turns a stock split into a fake crash.
+
+Next architectural step (not yet implemented): **cross-sectional** momentum (rank the whole
+universe monthly, buy the top decile) has stronger academic evidence in equities but needs a
+portfolio/universe strategy contract, because the question becomes "is AAPL more attractive
+than MSFT" rather than "is AAPL attractive".
+
 ### TRADING_MODE
 
 | Mode | Meaning |
