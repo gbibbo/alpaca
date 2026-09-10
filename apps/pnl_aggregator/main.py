@@ -68,241 +68,70 @@ TRADES_COUNT = Counter(
 
 
 class PnLAggregator:
-    """Simple PnL aggregator for backtesting and live trading"""
-
-    def __init__(self, initial_cash: Decimal = Decimal('100000')):
-        self.initial_cash = initial_cash
-        self.cash = initial_cash
-        self.positions = {}  # symbol -> quantity
-        self.avg_cost = {}   # symbol -> average cost per share
-        self.realized_pnl = {}  # symbol -> realized PnL
-        self.total_realized = Decimal('0')
-        self.fills = []  # List of all fills for export
-
-        # Track for CSV export
+    """Ledger reconstructed from durable fills, marked by incoming bars."""
+    def __init__(self, initial_cash=Decimal('100000'), journal_path=None):
+        from lib.portfolio import Portfolio
+        import sqlite3
+        self.ledger = Portfolio(initial_cash)
         self.equity_history = []
-
-        # Metrics
         self.metrics = ServiceMetrics('pnl_aggregator')
+        self.db = sqlite3.connect(journal_path or ':memory:')
+        self.db.execute('CREATE TABLE IF NOT EXISTS fills (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        for (payload,) in self.db.execute('SELECT payload FROM fills ORDER BY rowid'):
+            self._apply(OrderFill.model_validate_json(payload))
 
-        # Start metrics server
-        try:
-            metrics_port = int(os.getenv("PNL_METRICS_PORT", "8015"))
-            start_metrics_server(metrics_port)
-            logger.info(f"📊 PnL Aggregator metrics available at http://localhost:{metrics_port}/metrics")
-        except OSError as e:
-            if getattr(e, "errno", None) == 98:  # Address already in use
-                try:
-                    from lib.metrics_helpers import find_available_port
-                    metrics_port = find_available_port(metrics_port + 1)
-                    start_metrics_server(metrics_port)
-                    logger.warning(f"Metrics port busy. Using fallback http://localhost:{metrics_port}/metrics")
-                except Exception as fallback_error:
-                    logger.warning(f"Failed to start metrics server on fallback port: {fallback_error}")
-            else:
-                logger.warning(f"Failed to start metrics server: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to start metrics server: {e}")
+    def __getattr__(self, name):
+        return getattr(self.ledger, name)
 
-        logger.info(f"PnL Aggregator initialized with ${initial_cash:,.2f} starting cash")
+    def _apply(self, fill):
+        return self.ledger.fill(fill.fill_id, fill.symbol, fill.side, fill.fill_quantity,
+                                fill.fill_price, fill.commission, fill.timestamp.isoformat())
 
-    def process_fill(self, fill: OrderFill):
-        """Process an order fill and update portfolio"""
-        symbol = fill.symbol
-        quantity = fill.fill_quantity
-        price = fill.fill_price
-        side = fill.side
-        timestamp = fill.timestamp
+    def process_fill(self, fill):
+        if str(fill.fill_id) in self.ledger.seen:
+            return
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO fills VALUES (?, ?)',
+                            (str(fill.fill_id), fill.model_dump_json()))
+        self._apply(fill)
+        self.equity_history.append(self.ledger.snapshot(fill.timestamp.isoformat()))
 
-        # Convert side to signed quantity
-        signed_qty = quantity if side == SignalSide.BUY else -quantity
-        fill_value = quantity * price
+    def process_bar(self, bar):
+        self.ledger.mark(bar.symbol, bar.close)
+        self.equity_history.append(self.ledger.snapshot(bar.timestamp.isoformat()))
 
-        logger.info(f"Processing fill: {side.value} {quantity} {symbol} @ ${price:.2f}")
+    def get_stats(self):
+        snapshot = self.ledger.snapshot()
+        return {**snapshot, 'total_value': snapshot['equity'],
+                'total_realized_pnl': float(self.total_realized), 'total_trades': len(self.closed_trades),
+                'active_positions': len(snapshot['positions']),
+                'return_pct': float((self.equity / self.initial_cash - 1) * 100)}
 
-        # Initialize position if new
-        if symbol not in self.positions:
-            self.positions[symbol] = Decimal('0')
-            self.avg_cost[symbol] = Decimal('0')
-            self.realized_pnl[symbol] = Decimal('0')
-
-        current_position = self.positions[symbol]
-
-        if side == SignalSide.BUY:
-            # Buying: update average cost and increase position
-            if current_position >= 0:
-                # Adding to long position or opening new long
-                total_cost = (current_position * self.avg_cost[symbol]) + fill_value
-                total_shares = current_position + quantity
-                self.avg_cost[symbol] = total_cost / total_shares if total_shares > 0 else price
-                self.positions[symbol] = total_shares
-                self.cash -= fill_value
-            else:
-                # Covering short position
-                if quantity <= abs(current_position):
-                    # Partial or full cover
-                    realized = quantity * (self.avg_cost[symbol] - price)
-                    self.realized_pnl[symbol] += realized
-                    self.total_realized += realized
-                    self.positions[symbol] += quantity
-                    self.cash -= fill_value
-                else:
-                    # Cover all short and go long
-                    cover_qty = abs(current_position)
-                    realized = cover_qty * (self.avg_cost[symbol] - price)
-                    self.realized_pnl[symbol] += realized
-                    self.total_realized += realized
-
-                    # Go long with remaining
-                    remaining_qty = quantity - cover_qty
-                    self.positions[symbol] = remaining_qty
-                    self.avg_cost[symbol] = price
-                    self.cash -= fill_value
-
-        else:  # SELL
-            # Selling: realize PnL and decrease position
-            if current_position > 0:
-                # Selling long position
-                if quantity <= current_position:
-                    # Partial or full sale
-                    realized = quantity * (price - self.avg_cost[symbol])
-                    self.realized_pnl[symbol] += realized
-                    self.total_realized += realized
-                    self.positions[symbol] -= quantity
-                    self.cash += fill_value
-                else:
-                    # Sell all long and go short
-                    realized = current_position * (price - self.avg_cost[symbol])
-                    self.realized_pnl[symbol] += realized
-                    self.total_realized += realized
-
-                    # Go short with remaining
-                    remaining_qty = quantity - current_position
-                    self.positions[symbol] = -remaining_qty
-                    self.avg_cost[symbol] = price
-                    self.cash += fill_value
-            else:
-                # Adding to short position or opening new short
-                if current_position <= 0:
-                    total_value = (abs(current_position) * self.avg_cost[symbol]) + fill_value
-                    total_shares = abs(current_position) + quantity
-                    self.avg_cost[symbol] = total_value / total_shares
-                    self.positions[symbol] = -(abs(current_position) + quantity)
-                    self.cash += fill_value
-
-        # Record fill for export
-        self.fills.append({
-            'timestamp': timestamp.isoformat(),
-            'symbol': symbol,
-            'side': side.value,
-            'quantity': float(quantity),
-            'price': float(price),
-            'value': float(fill_value),
-            'realized_pnl': float(self.realized_pnl[symbol]),
-            'position': float(self.positions[symbol]),
-            'cash': float(self.cash)
-        })
-
-        # Update metrics
-        TRADES_COUNT.labels(symbol=symbol, side=side.value).inc()
-        PNL_REALIZED.labels(symbol=symbol).set(float(self.realized_pnl[symbol]))
-        POSITION_VALUE.labels(symbol=symbol).set(float(self.positions[symbol] * price))
-        PORTFOLIO_CASH.set(float(self.cash))
-
-        # Calculate and record equity snapshot
-        total_value = float(self.cash)
-        for sym, pos in self.positions.items():
-            if pos != 0:
-                # Use last price for mark-to-market (simplified)
-                last_price = price if sym == symbol else self.avg_cost.get(sym, Decimal('0'))
-                total_value += float(pos * last_price)
-
-        self.equity_history.append({
-            'timestamp': timestamp.isoformat(),
-            'cash': float(self.cash),
-            'total_value': total_value,
-            'realized_pnl': float(self.total_realized),
-            'positions': dict(self.positions)
-        })
-
-        # Log summary
-        logger.info(f"Portfolio update: Cash=${self.cash:,.2f}, Total PnL=${self.total_realized:,.2f}, Positions={len([p for p in self.positions.values() if p != 0])}")
-
-    def export_results(self, output_dir: str = "data/pnl_results"):
-        """Export results to CSV files"""
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Export fills
-        fills_file = output_path / f"fills_{timestamp}.csv"
-        with open(fills_file, 'w', newline='') as f:
-            if self.fills:
-                writer = csv.DictWriter(f, fieldnames=self.fills[0].keys())
-                writer.writeheader()
-                writer.writerows(self.fills)
-
-        # Export equity curve
-        equity_file = output_path / f"equity_{timestamp}.csv"
-        with open(equity_file, 'w', newline='') as f:
-            if self.equity_history:
-                writer = csv.DictWriter(f, fieldnames=self.equity_history[0].keys())
-                writer.writeheader()
-                writer.writerows(self.equity_history)
-
-        # Export final summary
-        summary = {
-            'initial_cash': float(self.initial_cash),
-            'final_cash': float(self.cash),
-            'total_realized_pnl': float(self.total_realized),
-            'total_trades': len(self.fills),
-            'final_positions': {str(k): float(v) for k, v in self.positions.items() if v != 0},
-            'return_pct': float((self.cash + self.total_realized - self.initial_cash) / self.initial_cash * 100)
-        }
-
-        summary_file = output_path / f"summary_{timestamp}.json"
-        with open(summary_file, 'w') as f:
-            json.dump(summary, f, indent=2)
-
-        logger.info(f"Results exported to {output_path}")
-        logger.info(f"  Fills: {fills_file}")
-        logger.info(f"  Equity: {equity_file}")
-        logger.info(f"  Summary: {summary_file}")
-        logger.info(f"  Total Return: {summary['return_pct']:.2f}%")
-
+    def export_results(self, output_dir='data/pnl_results'):
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        summary = {**self.get_stats(), 'initial_cash': float(self.initial_cash),
+                   'final_cash': float(self.cash), 'final_positions': self.get_stats()['positions'],
+                   'trades': self.trade_stats()}
+        (output / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+        (output / 'fills.json').write_text(json.dumps(self.fills, indent=2), encoding='utf-8')
+        (output / 'equity.json').write_text(json.dumps(self.equity_history, indent=2), encoding='utf-8')
         return summary
-
-    def get_stats(self) -> Dict:
-        """Get current portfolio statistics"""
-        total_value = float(self.cash)
-        for symbol, position in self.positions.items():
-            if position != 0:
-                # Use average cost for simplicity (in real system, use current market price)
-                total_value += float(position * self.avg_cost.get(symbol, Decimal('0')))
-
-        return {
-            "cash": float(self.cash),
-            "total_value": total_value,
-            "total_realized_pnl": float(self.total_realized),
-            "total_trades": len(self.fills),
-            "active_positions": len([p for p in self.positions.values() if p != 0]),
-            "positions": {k: float(v) for k, v in self.positions.items() if v != 0},
-            "return_pct": (total_value - float(self.initial_cash)) / float(self.initial_cash) * 100
-        }
 
 
 async def main():
     """Main PnL aggregator loop"""
     logger.info("Starting PnL Aggregator...")
 
+    os.environ["SERVICE_NAME"] = "pnl_aggregator"
     # Connect to message bus
     if not connect_bus():
         logger.error("Failed to connect to message bus")
         return
 
     bus = get_bus()
-    aggregator = PnLAggregator()
+    Path('data').mkdir(exist_ok=True)
+    aggregator = PnLAggregator(journal_path='data/pnl.sqlite')
 
     # Mark service start
     aggregator.metrics.mark_service_start()
@@ -323,6 +152,11 @@ async def main():
             logger.error(f"Error processing fill: {e}")
             return False  # Don't ACK on error
 
+    async def marks():
+        async for bar in bus.subscribe_bars():
+            aggregator.process_bar(bar)
+
+    mark_task = asyncio.create_task(marks())
     try:
         # Check if we're using Streams
         if hasattr(bus.backend, 'consume_with_handler') and bus.get_stats().get('backend') == 'streams':
@@ -341,6 +175,8 @@ async def main():
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:
+        mark_task.cancel()
+        await asyncio.gather(mark_task, return_exceptions=True)
         # Export results on shutdown
         logger.info("Exporting final results...")
         summary = aggregator.export_results()

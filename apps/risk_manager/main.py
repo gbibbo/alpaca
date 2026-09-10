@@ -161,6 +161,7 @@ class EnhancedRiskManager:
     """
     
     def __init__(self):
+        os.environ["SERVICE_NAME"] = "risk_manager"
         self.settings = get_settings()
         self.bus = get_bus()
         self.running = False
@@ -310,7 +311,7 @@ class EnhancedRiskManager:
         with TimingContext("signal_validation") as timer:
             
             # 1. Emergency Stop Check (highest priority)
-            if self.emergency_stop:
+            if self.emergency_stop or self.bus.redis_client.get("trading:emergency_stop"):
                 return False, f"Emergency stop active: {self.emergency_reason}"
             
             # 2. Circuit Breaker Check
@@ -321,7 +322,7 @@ class EnhancedRiskManager:
             
             # 3. Market Hours Validation (timezone-aware)
             market_open, market_reason = self.market_validator.validate_trading_hours()
-            if not market_open:
+            if not market_open and signal.timeframe.value != "1d":
                 return False, f"Market hours: {market_reason}"
             
             # 4. Deduplication Check (persistent)
@@ -371,7 +372,7 @@ class EnhancedRiskManager:
                     return equity
             except Exception as e:
                 logger.warning(f"Could not fetch account equity, using fallback: {e}")
-        return self._portfolio_value_cache or Decimal('100000')
+        raise RuntimeError('Account equity unavailable; refusing to increase risk')
 
     def get_positions(self, max_age_seconds: int = 30) -> Dict[str, Dict[str, Decimal]]:
         """Open positions from Alpaca as {symbol: {qty, market_value}} (cached)."""
@@ -379,7 +380,7 @@ class EnhancedRiskManager:
         if self._positions_cache and now - self._positions_cached_at < max_age_seconds:
             return self._positions_cache
         if self.alpaca_client is None:
-            return self._positions_cache
+            raise RuntimeError('Position source unavailable')
         try:
             positions = {}
             for p in self.alpaca_client.get_all_positions():
@@ -394,7 +395,7 @@ class EnhancedRiskManager:
             self._positions_cache = positions
             self._positions_cached_at = now
         except Exception as e:
-            logger.warning(f"Could not fetch positions, using cached/empty: {e}")
+            raise RuntimeError("Positions unavailable; refusing to trade") from e
         return self._positions_cache
 
     def calculate_position_size(self, signal: Signal, portfolio_value: Optional[Decimal] = None,
@@ -430,12 +431,14 @@ class EnhancedRiskManager:
 
             # BUY
             base_risk_amount = portfolio_value * Decimal(str(self.settings.risk_pct))
-            confidence_adjusted_risk = base_risk_amount * signal.confidence
+            confidence_adjusted_risk = base_risk_amount / Decimal(str(self.settings.stop_loss_pct))
             room = max_position_value - held_value
             if room <= 0:
                 return Decimal('0'), (f"Position limit reached for {signal.symbol}: holding ${held_value:.2f} "
                                       f"of max ${max_position_value:.2f} ({float(self.settings.max_position_size):.0%} of equity)")
-            position_value = min(confidence_adjusted_risk, room)
+            aggregate = sum((abs(p.get('market_value', Decimal(0))) for p in positions.values()), Decimal(0))
+            aggregate_room = portfolio_value * Decimal(str(self.settings.max_portfolio_risk)) - aggregate
+            position_value = min(confidence_adjusted_risk, room, aggregate_room)
 
             if price is None:
                 return Decimal('0'), "Signal has no price; cannot size position"
@@ -462,7 +465,7 @@ class EnhancedRiskManager:
             size_reasoning = "quantity supplied by caller"
 
         # Generate unique client order ID with risk manager prefix
-        client_order_id = f"risk_{signal.source}_{signal.symbol}_{signal.signal_id.hex[:8]}"
+        client_order_id = f"risk_{signal.signal_id.hex}"
         
         # Create order intent
         order_intent = OrderIntent(
@@ -474,9 +477,11 @@ class EnhancedRiskManager:
             price=signal.price,
             client_order_id=client_order_id,
             signal_source=signal.source,
+            stop_loss=signal.price * (1 - Decimal(str(self.settings.stop_loss_pct))) if signal.price and signal.side == SignalSide.BUY else None,
+            take_profit=signal.price * (1 + Decimal(str(self.settings.take_profit_pct))) if signal.price and signal.side == SignalSide.BUY else None,
             risk_adjusted=True,
             max_slippage_bps=50,  # 0.5% max slippage
-            valid_until=TimeUtils.utc_now() + timedelta(minutes=5)  # 5 minute expiry
+            valid_until=signal.timestamp + timedelta(seconds=signal.expire_seconds or 300)  # 5 minute expiry
         )
         
         logger.info(f"Created order intent: {order_intent.side} {order_intent.quantity} {order_intent.symbol}")
@@ -542,11 +547,6 @@ class EnhancedRiskManager:
                 )
                 return
 
-            # Mark signal as processed (persistent deduplication)
-            if not self.deduplication.mark_signal_processed(signal):
-                logger.warning(f"Failed to mark signal as processed: {signal.symbol}")
-                return
-            
             # Record successful validation
             self.circuit_breakers["risk_validation"].record_success()
             
@@ -577,16 +577,13 @@ class EnhancedRiskManager:
             # Create order intent
             order_intent = self.create_order_intent(signal, quantity=quantity)
 
-            # Mark order intent as processed to prevent duplicates
-            if not self.deduplication.mark_order_processed(order_intent):
-                logger.warning(f"Order intent already processed: {order_intent.client_order_id}")
-                return
-            
             # Record order rate limit usage
             self.order_rate_limiter.record_request(f"order_{order_intent.symbol}")
             
             # Publish order intent
             self.bus.publish_order_intent(order_intent)
+            self.deduplication.mark_signal_processed(signal)
+            self.deduplication.mark_order_processed(order_intent)
 
             self.signals_approved += 1
             self.orders_created += 1
@@ -627,6 +624,7 @@ class EnhancedRiskManager:
                     "source": signal.source
                 }
             )
+            raise
     
     async def consume_signals(self):
         """Consume signals from message bus with Streams-optimized processing"""

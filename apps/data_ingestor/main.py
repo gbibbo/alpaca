@@ -119,6 +119,9 @@ class AlpacaDataIngestor:
     # ------------------------------------------------------------ publishing
     def _publish(self, bar: Bar, live: bool) -> bool:
         """Publish a bar (any timeframe) once; feeds the resampler for 1m bars."""
+        from lib.backtest import available_at
+        if not bar.is_complete or available_at(bar) > datetime.now(timezone.utc):
+            return False
         key = (bar.symbol, bar.timeframe)
         last = self._last_ts.get(key)
         if last is not None and bar.timestamp <= last:
@@ -145,6 +148,7 @@ class AlpacaDataIngestor:
             start=start,
             end=end,
             feed=self.data_feed,
+            adjustment="all",
         )
         response = self.data_client.get_stock_bars(request)
         if response.df is None or response.df.empty:

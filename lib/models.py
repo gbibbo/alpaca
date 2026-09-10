@@ -98,6 +98,7 @@ class Bar(BaseModel):
     high: Decimal = Field(gt=0, decimal_places=4)
     low: Decimal = Field(gt=0, decimal_places=4)
     close: Decimal = Field(gt=0, decimal_places=4)
+    is_complete: bool = True
     volume: int = Field(ge=0)
     timeframe: TimeFrame = TimeFrame.MINUTE
 

@@ -58,6 +58,10 @@ class RedisStreamsBus:
             "system": "system_processors"
         }
 
+        role = os.getenv('SERVICE_NAME', 'default')
+        if role != 'default':
+            self.consumer_groups = {key: f'{value}:{role}' for key, value in self.consumer_groups.items()}
+
         # Generate unique consumer ID with microsecond precision
         hostname = socket.gethostname()
         pid = os.getpid()
@@ -65,7 +69,7 @@ class RedisStreamsBus:
         self.consumer_id = f"{hostname}_{pid}_{int(time.time() * 1000000)}_{uuid.uuid4().hex[:8]}"
 
         # Configuration
-        self.max_stream_length = 10000
+        self.max_stream_length = None  # explicit retention must respect every consumer watermark
         self.consumer_timeout = 2000  # 2 seconds
         self.ack_timeout = 300000     # 5 minutes
 
@@ -820,6 +824,33 @@ class RedisStreamsBus:
             "timestamp": TimeUtils.utc_now().isoformat()
         }
         return self.publish("system", payload)
+
+    async def _subscribe_model(self, stream_type, model, symbol='*'):
+        stream = self.streams[stream_type]
+        group = self.consumer_groups[stream_type]
+        await self._ensure_group(stream, group)
+        # Recover this consumer's unacknowledged messages before reading new ones.
+        while True:
+            rows = await asyncio.to_thread(self.redis_client.xreadgroup, group, self.consumer_id,
+                                            {stream: '>'}, count=32, block=1000)
+            for _, messages in rows:
+                for message_id, payload in messages:
+                    value = model.model_validate_json(payload['data'])
+                    if symbol == '*' or value.symbol == symbol:
+                        yield value
+                    self.ack(stream_type, message_id)
+
+    def subscribe_bars(self, symbol='*'):
+        return self._subscribe_model('bars', Bar, symbol)
+
+    def subscribe_signals(self, symbol='*'):
+        return self._subscribe_model('signals', Signal, symbol)
+
+    def subscribe_order_intents(self):
+        return self._subscribe_model('orders', OrderIntent)
+
+    def subscribe_order_fills(self, symbol='*'):
+        return self._subscribe_model('fills', OrderFill, symbol)
 
     # Statistics and monitoring
     def get_stats(self) -> dict:

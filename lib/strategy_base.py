@@ -78,9 +78,12 @@ class Strategy(ABC):
         }
         if metadata:
             meta.update(metadata)
+        from lib.backtest import available_at
+        from uuid import uuid5, NAMESPACE_URL
         return Signal(
+            signal_id=uuid5(NAMESPACE_URL, f"{self.name}:{symbol}:{latest.timestamp.isoformat()}:{side.value}"),
             symbol=symbol,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=available_at(latest),
             side=side,
             confidence=round(float(confidence), 3),
             price=latest.close,

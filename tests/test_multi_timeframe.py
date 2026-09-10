@@ -131,6 +131,7 @@ class TestStrategyRouting:
 
         os.environ["STRATEGIES_METRICS_PORT"] = "0"
         engine = StrategyEngine(strategies=[Spy5m(), Spy1m()])
+        engine.max_bar_age_seconds = 0
         engine.bus.publish_signal = lambda s: published.append(s)
         engine.bus.publish_system_event = lambda **kw: None
 
@@ -160,6 +161,7 @@ class TestStrategyRouting:
 
         os.environ["STRATEGIES_METRICS_PORT"] = "0"
         engine = StrategyEngine(strategies=[Always()])
+        engine.max_bar_age_seconds = 0
         out = []
         engine.bus.publish_signal = lambda s: out.append(s)
         engine.bus.publish_system_event = lambda **kw: None
@@ -214,9 +216,9 @@ class TestPortfolioAwareSizing:
     def test_buy_without_position_uses_risk_budget(self, rm):
         equity = Decimal("100000")
         sig = Signal(symbol="AAPL", side=SignalSide.BUY, confidence=0.5, price=Decimal("200"), source="hourly_trend")
-        # risk_pct default 2% -> $2000 * 0.5 confidence = $1000 -> 5 shares
+        # Loss budget / stop distance, capped at 10% exposure = $10,000 -> 50 shares
         qty, why = rm.calculate_position_size(sig, equity, {})
-        assert qty == Decimal("5"), why
+        assert qty == Decimal("50"), why
 
     def test_sell_limited_to_holdings(self, rm):
         equity = Decimal("100000")

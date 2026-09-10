@@ -6,6 +6,7 @@ Implements ChatGPT's recommendations for robust idempotency and TTL management
 """
 
 import json
+import hashlib
 import logging
 from typing import Set, Dict, Optional, Any
 from datetime import datetime, timedelta
@@ -75,8 +76,8 @@ class DeduplicationService:
             signal.timestamp.isoformat() if signal.timestamp else "no_timestamp"
         ]
         
-        key_hash = hash(tuple(key_parts))
-        return f"{self.signal_prefix}{signal.symbol}:{signal.source}:{abs(key_hash)}"
+        key_hash = hashlib.sha256(json.dumps(key_parts).encode()).hexdigest()
+        return f"{self.signal_prefix}{signal.symbol}:{signal.source}:{key_hash}"
     
     def _generate_order_key(self, order: OrderIntent) -> str:
         """Generate unique, stable key for order deduplication"""
@@ -127,8 +128,7 @@ class DeduplicationService:
                 self.redis_misses += 1
                 return False
         except Exception as e:
-            logger.error(f"Redis check failed for key {key}: {e}")
-            return False
+            raise RuntimeError("Deduplication store unavailable") from e
     
     def _set_redis_with_ttl(self, key: str, value: Any, ttl: int) -> bool:
         """Set key in Redis with TTL"""
@@ -139,8 +139,7 @@ class DeduplicationService:
             else:
                 stored_value = str(value)
             
-            self.redis.setex(key, ttl, stored_value)
-            return True
+            return bool(self.redis.set(key, stored_value, nx=True, ex=ttl))
         except Exception as e:
             logger.error(f"Redis set failed for key {key}: {e}")
             return False

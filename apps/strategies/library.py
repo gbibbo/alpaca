@@ -230,7 +230,7 @@ class DailyTrendStrategy(Strategy):
     lookback_bars = 200
     max_history = 400
     cooldown_seconds = 5 * 86400
-    signal_expiry_seconds = 6 * 3600
+    signal_expiry_seconds = 4 * 86400
     description = "SMA50/SMA200 regime + RSI14 filter on daily bars"
 
     def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:

@@ -16,6 +16,16 @@ from lib.models import OrderIntent, SignalSide, OrderType
 from apps.executor.main import EnhancedAlpacaExecutor
 
 
+@pytest.fixture(autouse=True)
+def isolated_executor_settings(monkeypatch):
+    from lib.settings import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(settings, 'apca_api_key_id', 'test-only')
+    monkeypatch.setattr(settings, 'apca_api_secret_key', 'test-only')
+    monkeypatch.setattr(settings, 'trading_mode', 'paper')
+    monkeypatch.setenv('EXECUTOR_JOURNAL', ':memory:')
+
+
 class TestClientOrderIdDeterministic:
     """Test deterministic client_order_id generation (Epic 4 T4.1)"""
 
@@ -84,10 +94,13 @@ class TestDuplicateOrderDetection:
         """Orders with same client_order_id should be detected as duplicates"""
         # Mock Alpaca client
         mock_trading_client = Mock()
+        mock_trading_client.get_all_positions.return_value = []
+        mock_trading_client.get_orders.return_value = []
         mock_trading_client.get_account = Mock(return_value=Mock(
             status="ACTIVE",
             buying_power=100000,
             cash=100000,
+            equity=100000, last_equity=100000,
             portfolio_value=100000
         ))
 
@@ -127,6 +140,7 @@ class TestDuplicateOrderDetection:
                 order_type=OrderType.MARKET,
                 client_order_id="risk_smart_GOOGL_20250105_abc123",
                 signal_source="smart_technical",
+                stop_loss=Decimal("147"), take_profit=Decimal("159"),
                 price=Decimal("150")
             )
 
@@ -150,10 +164,13 @@ class TestRetryWith429:
     async def test_429_retry_uses_same_client_order_id(self):
         """429 retry should use the same client_order_id"""
         mock_trading_client = Mock()
+        mock_trading_client.get_all_positions.return_value = []
+        mock_trading_client.get_orders.return_value = []
         mock_trading_client.get_account = Mock(return_value=Mock(
             status="ACTIVE",
             buying_power=100000,
             cash=100000,
+            equity=100000, last_equity=100000,
             portfolio_value=100000
         ))
 
@@ -187,6 +204,7 @@ class TestRetryWith429:
                 order_type=OrderType.MARKET,
                 client_order_id="risk_test_AAPL_20250105_def456",
                 signal_source="test_strategy",
+                stop_loss=Decimal("176"), take_profit=Decimal("191"),
                 price=Decimal("180")
             )
 

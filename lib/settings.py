@@ -7,7 +7,7 @@ Enhanced with timezone support
 """
 
 from pydantic_settings import BaseSettings
-from typing import List, Optional
+from typing import List, Optional, Literal
 from pydantic import Field
 import pytz
 
@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     apca_api_base_url: str = "https://paper-api.alpaca.markets"
     apca_api_data_url: str = "https://data.alpaca.markets"
     
+    trading_mode: Literal["backtest", "paper", "live"] = "backtest"
+
     # Trading Configuration
     symbols: str = "AAPL,MSFT,GOOGL,TSLA,NVDA"  # Comma-separated string
     symbol: str = "AAPL"  # Single symbol for backward compatibility
@@ -46,7 +48,7 @@ class Settings(BaseSettings):
     allow_fake_redis_fallback: bool = False  # If True, silently use an in-process fakeredis when Redis is down
     
     # API Configuration
-    api_host: str = "0.0.0.0"
+    api_host: str = "127.0.0.1"
     api_port: int = 8000
     
     # System Configuration

@@ -28,6 +28,7 @@ wheels/
 MANIFEST
 
 # Entornos virtuales
+.venv/
 finrl_alpaca/
 trading_env/
 venv/
@@ -162,3 +163,10 @@ test_fixed_summary_*.txt
 test_summary_*.txt
 test_fixed_results_*.log
 test_all_results_*.log
+
+# Runtime backtest job artifacts (keep engine code/tests, not run outputs)
+data/backtest_results/*_job.json
+data/backtest_results/*_results.json
+# Ad-hoc audit / handoff run outputs
+out/*.txt
+out/*.js

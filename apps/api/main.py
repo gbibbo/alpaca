@@ -21,13 +21,18 @@ from enum import Enum
 # Add lib to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, BackgroundTasks, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from lib.models import Signal, SignalSide, PortfolioState, SystemHealth
 from lib.bus import get_bus, connect_bus
+from lib.settings import get_settings
+from lib.auth_dependencies import get_current_user, require_permission
+from lib.auth import Permission
+from lib.backtest import ResearchConfig
+from apps.api.auth_routes import router as auth_router
 from dotenv import load_dotenv
 
 # NEW: Prometheus metrics imports
@@ -121,13 +126,31 @@ class BacktestRequest(BaseModel):
     symbols: List[str]
     start_date: str  # ISO format
     end_date: Optional[str] = None
-    timeframe: str = "1Min"
+    timeframe: str = "1Day"
     feed: str = "iex"
     seed: Optional[int] = None
     speed_multiplier: float = 10.0  # Default to fast backtesting
-    strategies: List[str] = ["random_50_50", "smart_technical"]
-    initial_cash: float = 100000.0
+    strategies: List[str] = Field(default_factory=lambda: ["daily_trend"])
+    initial_cash: float = Field(default=100000.0, gt=0)
+    csv_dir: str = "data/csv"
     risk_params: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_research(self):
+        ResearchConfig(**{**(self.risk_params or {}), 'strategies': self.strategies,
+                          'initial_cash': self.initial_cash, 'seed': self.seed if self.seed is not None else 42})
+        from lib.timeframes import parse_timeframe
+        parse_timeframe(self.timeframe)
+        root = Path('data').resolve()
+        candidate = Path(self.csv_dir).resolve()
+        if not candidate.is_relative_to(root):
+            raise ValueError('csv_dir must be inside the repository data directory')
+        if not self.symbols or any(not symbol.isalnum() for symbol in self.symbols):
+            raise ValueError('Invalid symbols')
+        start = datetime.fromisoformat(self.start_date.replace('Z', '+00:00'))
+        if self.end_date and datetime.fromisoformat(self.end_date.replace('Z', '+00:00')) <= start:
+            raise ValueError('end_date must be after start_date')
+        return self
 
     class Config:
         schema_extra = {
@@ -169,16 +192,34 @@ startup_time = datetime.utcnow()
 class JobManager:
     """Manages backtest job lifecycle"""
 
-    def __init__(self):
+    def __init__(self, results_dir="data/backtest_results"):
         self.jobs: Dict[str, BacktestJob] = {}
         self.running_processes: Dict[str, asyncio.subprocess.Process] = {}
         self.max_concurrent_jobs = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))
 
         # Results directory
-        self.results_dir = Path("data/backtest_results")
+        self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
+        for path in self.results_dir.glob('*_job.json'):
+            try:
+                job = BacktestJob.model_validate_json(path.read_text(encoding='utf-8'))
+                if job.status == JobStatus.RUNNING:
+                    job.status = JobStatus.FAILED
+                    job.error_message = 'API restarted before job completion was confirmed'
+                result = self.results_dir / f'{job.job_id}_results.json'
+                if job.status == JobStatus.COMPLETED and result.exists():
+                    job.results = json.loads(result.read_text(encoding='utf-8'))
+                self.jobs[job.job_id] = job
+            except (ValueError, OSError):
+                logger.exception('Invalid persisted job %s', path)
         logger.info(f"JobManager initialized with max {self.max_concurrent_jobs} concurrent jobs")
+
+    def save_job(self, job):
+        destination = self.results_dir / f'{job.job_id}_job.json'
+        temp = destination.with_suffix('.tmp')
+        temp.write_text(job.model_dump_json(exclude={'results'}), encoding='utf-8')
+        temp.replace(destination)
 
     def create_job(self, config: BacktestRequest) -> str:
         """Create a new backtest job"""
@@ -192,6 +233,7 @@ class JobManager:
         )
 
         self.jobs[job_id] = job
+        self.save_job(job)
 
         if METRICS.get('trading_orders'):  # Using existing counter for jobs
             METRICS['trading_orders'].labels(symbol="BACKTEST", side="JOB", status="created").inc()
@@ -235,6 +277,7 @@ class JobManager:
             # Update job status
             job.status = JobStatus.RUNNING
             job.started_at = datetime.utcnow()
+            self.save_job(job)
 
             # Build simulator command
             cmd = self._build_simulator_command(job_id, job.config)
@@ -265,16 +308,12 @@ class JobManager:
 
     def _build_simulator_command(self, job_id: str, config: BacktestRequest) -> List[str]:
         """Build simulator command line"""
-        cmd = [
-            "python", "apps/simulator/main.py",
-            "--symbols", ",".join(config.symbols),
-            "--start", config.start_date,
-            "--timeframe", config.timeframe,
-            "--feed", config.feed,
-            "--speed", str(config.speed_multiplier),
-            "--output", str(self.results_dir / f"{job_id}_results.json"),
-            "--no-delays"  # Fast backtesting
-        ]
+        cmd = [sys.executable, '-X', 'utf8', 'apps/simulator/main.py',
+               '--symbols', ','.join(config.symbols), '--start', config.start_date,
+               '--timeframe', config.timeframe, '--csv', config.csv_dir,
+               '--strategies', ','.join(config.strategies), '--initial-cash', str(config.initial_cash),
+               '--risk-params', json.dumps(config.risk_params or {}),
+               '--output', str(self.results_dir / f'{job_id}_results.json')]
 
         if config.end_date:
             cmd.extend(["--end", config.end_date])
@@ -293,6 +332,8 @@ class JobManager:
             stdout, stderr = await process.communicate()
 
             # Update job based on exit code
+            if job.status == JobStatus.CANCELLED:
+                return
             if process.returncode == 0:
                 job.status = JobStatus.COMPLETED
                 job.completed_at = datetime.utcnow()
@@ -307,6 +348,8 @@ class JobManager:
                     except Exception as e:
                         logger.warning(f"Failed to load results for job {job_id}: {e}")
 
+                if job.results is None or job.results.get("mode") != "backtest":
+                    raise ValueError("Backtest ended without valid results")
                 logger.info(f"Job {job_id} completed successfully")
 
             else:
@@ -326,6 +369,7 @@ class JobManager:
             logger.error(f"Error monitoring job {job_id}: {e}")
 
         finally:
+            self.save_job(job)
             # Cleanup
             if job_id in self.running_processes:
                 del self.running_processes[job_id]
@@ -341,6 +385,8 @@ class JobManager:
 
         process = self.running_processes.get(job_id)
         if process:
+            job.status = JobStatus.CANCELLED
+            self.save_job(job)
             try:
                 process.terminate()
                 await asyncio.wait_for(process.wait(), timeout=5.0)
@@ -405,6 +451,10 @@ async def startup():
             'features': 'redis_streams,prometheus_metrics,real_time_monitoring'
         })
     
+    # Research API operates without Redis or any broker.
+    if get_settings().trading_mode == "backtest":
+        return
+    os.environ["SERVICE_NAME"] = "api"
     # Connect to message bus
     if not connect_bus():
         logger.error("Failed to connect to Redis")
@@ -446,6 +496,8 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan
 )
+
+app.include_router(auth_router)
 
 # Add Prometheus instrumentation
 instrumentator.instrument(app).expose(app, endpoint="/metrics")
@@ -498,7 +550,7 @@ async def update_system_metrics():
 
 # NEW: Dashboard and WebSocket endpoints
 @app.get("/", response_class=HTMLResponse)
-@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse, dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def dashboard():
     """Serve the main trading system UI"""
     return FileResponse("static/index.html")
@@ -506,6 +558,13 @@ async def dashboard():
 @app.websocket("/ws/dashboard")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time dashboard updates"""
+    from lib.auth import decode_token, get_user
+    auth = websocket.headers.get('authorization', '')
+    token = decode_token(auth.removeprefix('Bearer '))
+    user = get_user(token.username) if token else None
+    if not user or user.disabled:
+        await websocket.close(code=1008)
+        return
     await manager.connect(websocket)
     try:
         # Send initial data
@@ -559,8 +618,8 @@ async def send_dashboard_update(websocket: WebSocket):
         
         # Metrics update
         metrics_data = {
-            "orders_today": 15,  # Simulated
-            "success_rate": 0.8,  # Simulated
+            "orders_today": None,
+            "success_rate": None,
             "messages_published": bus.messages_published if bus else 0,
             "messages_consumed": bus.messages_consumed if bus else 0
         }
@@ -580,37 +639,34 @@ async def get_system_status_data():
         
         return {
             "services": {
-                "data_ingestor": "running",
-                "strategies": "running", 
-                "risk_manager": "running",
-                "executor": "running",
+                "data_ingestor": "unverified",
+                "strategies": "unverified",
+                "risk_manager": "unverified",
+                "executor": "unverified",
                 "api": "running"
             },
             "redis_status": redis_health,
             "total_symbols": len([ch for ch in bus_stats.get("channels", {}) if ch.startswith("bars.")]),
-            "active_strategies": ["random_50_50", "smart_technical"]
+            "active_strategies": []
         }
     except Exception as e:
         logger.error(f"Error getting system status: {e}")
         return {"error": str(e)}
 
 async def get_portfolio_data():
-    """Get portfolio data for dashboard"""
-    return {
-        "total_value": 100000.0,
-        "cash": 85000.0,
-        "buying_power": 170000.0,
-        "positions": [
-            {
-                "symbol": "AAPL",
-                "quantity": 50,
-                "avg_cost": 245.50,
-                "market_value": 12275.0,
-                "unrealized_pnl": 275.0
-            }
-        ],
-        "total_pnl": 275.0
-    }
+    if get_settings().trading_mode == 'backtest':
+        raise HTTPException(503, 'No operational portfolio in backtest mode; select a completed job account')
+    if bus is None:
+        raise HTTPException(503, 'Portfolio unavailable')
+    raw = bus.redis_client.get('trading:portfolio')
+    if not raw:
+        raise HTTPException(503, 'No reconciled portfolio snapshot')
+    data = json.loads(raw)
+    from datetime import timezone
+    if (datetime.now(timezone.utc) - datetime.fromisoformat(data['timestamp'])).total_seconds() > 60:
+        raise HTTPException(503, 'Portfolio snapshot is stale')
+    return data
+
 
 # Health and Status Endpoints
 @app.get("/health")
@@ -624,7 +680,7 @@ async def health_check():
     
     return health_status
 
-@app.get("/status", response_model=SystemStatusResponse)
+@app.get("/status", response_model=SystemStatusResponse, dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def get_system_status():
     """Get comprehensive system status with metrics"""
     try:
@@ -636,10 +692,10 @@ async def get_system_status():
         
         # Simulate service status (in real implementation, track via events)
         services = {
-            "data_ingestor": "running",
-            "strategies": "running", 
-            "risk_manager": "running",
-            "executor": "running",
+            "data_ingestor": "unverified",
+            "strategies": "unverified",
+            "risk_manager": "unverified",
+            "executor": "unverified",
             "api": "running"
         }
         
@@ -656,7 +712,7 @@ async def get_system_status():
             services=services,
             redis_status=redis_health,
             total_symbols=total_symbols,
-            active_strategies=["random_50_50", "smart_technical"]
+            active_strategies=[]
         )
         
     except Exception as e:
@@ -666,7 +722,7 @@ async def get_system_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 # Signal Management
-@app.post("/signals/manual")
+@app.post("/signals/manual", dependencies=[Depends(require_permission(Permission.WRITE_SIGNALS))])
 async def create_manual_signal(signal_request: ManualSignalRequest):
     """Create manual trading signal with metrics"""
     try:
@@ -711,7 +767,7 @@ async def create_manual_signal(signal_request: ManualSignalRequest):
             METRICS['custom_errors'].labels(service='api', error_type='signal_creation').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/signals/history")
+@app.get("/signals/history", dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def get_signal_history(
     symbol: Optional[str] = None,
     hours: int = 24,
@@ -749,73 +805,19 @@ async def get_signal_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 # Portfolio and Positions
-@app.get("/portfolio")
+@app.get("/portfolio", dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def get_portfolio():
-    """Get current portfolio state with metrics"""
-    try:
-        # In real implementation, this would query the executor or database
-        # For now, return simulated data and update metrics
-        
-        portfolio_data = {
-            "total_value": 100000.0,
-            "cash": 85000.0,
-            "buying_power": 170000.0,
-            "positions": [
-                {
-                    "symbol": "AAPL",
-                    "quantity": 50,
-                    "avg_cost": 245.50,
-                    "market_value": 12275.0,
-                    "unrealized_pnl": 275.0
-                }
-            ],
-            "total_pnl": 275.0,
-            "last_updated": datetime.utcnow()
-        }
-        
-        # Update portfolio metrics
-        if METRICS.get('portfolio_value'):
-            METRICS['portfolio_value'].set(portfolio_data["total_value"])
-        if METRICS.get('position_count'):
-            METRICS['position_count'].set(len(portfolio_data["positions"]))
-        
-        return portfolio_data
-        
-    except Exception as e:
-        logger.error(f"Error getting portfolio: {e}")
-        if METRICS.get('custom_errors'):
-            METRICS['custom_errors'].labels(service='api', error_type='portfolio').inc()
-        raise HTTPException(status_code=500, detail=str(e))
+    return await get_portfolio_data()
 
-@app.get("/positions/{symbol}")
+
+@app.get("/positions/{symbol}", dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def get_position(symbol: str):
-    """Get position for specific symbol with metrics"""
-    try:
-        # Simulate position lookup
-        if symbol == "AAPL":
-            return {
-                "symbol": symbol,
-                "quantity": 50,
-                "avg_cost": 245.50,
-                "market_value": 12275.0,
-                "unrealized_pnl": 275.0,
-                "last_updated": datetime.utcnow()
-            }
-        else:
-            return {
-                "symbol": symbol,
-                "quantity": 0,
-                "message": "No position found"
-            }
-            
-    except Exception as e:
-        logger.error(f"Error getting position for {symbol}: {e}")
-        if METRICS.get('custom_errors'):
-            METRICS['custom_errors'].labels(service='api', error_type='position_lookup').inc()
-        raise HTTPException(status_code=500, detail=str(e))
+    portfolio = await get_portfolio_data()
+    return next((p for p in portfolio['positions'] if p['symbol'] == symbol.upper()), {'symbol': symbol, 'quantity': 0})
+
 
 # System Control
-@app.post("/system/restart/{service}")
+@app.post("/system/restart/{service}", dependencies=[Depends(require_permission(Permission.EMERGENCY_STOP))])
 async def restart_service(service: str):
     """Restart a specific service with metrics"""
     try:
@@ -845,35 +847,16 @@ async def restart_service(service: str):
         METRICS['custom_errors'].labels(service='api', error_type='service_restart').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/system/emergency_stop")
+@app.post("/system/emergency_stop", dependencies=[Depends(require_permission(Permission.EMERGENCY_STOP))])
 async def emergency_stop():
-    """Emergency stop all trading with metrics"""
-    try:
-        if not bus:
-            raise HTTPException(status_code=503, detail="Message bus not connected")
-        
-        # Publish emergency stop
-        bus.publish_system_event(
-            event_type="emergency_stop",
-            source="api",
-            data={"reason": "manual_emergency_stop", "timestamp": datetime.utcnow()}
-        )
-        
-        logger.warning("Emergency stop activated via API")
-        
-        return {
-            "status": "success",
-            "message": "Emergency stop activated",
-            "timestamp": datetime.utcnow()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error during emergency stop: {e}")
-        METRICS['custom_errors'].labels(service='api', error_type='emergency_stop').inc()
-        raise HTTPException(status_code=500, detail=str(e))
+    if bus is None:
+        raise HTTPException(503, 'No operational bus')
+    bus.redis_client.set('trading:emergency_stop', '1')
+    return {'status': 'stop_requested', 'blocked': True, 'executor_ack': bus.redis_client.get('trading:stop_ack')}
+
 
 # Monitoring and Logs
-@app.get("/events")
+@app.get("/events", dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def get_system_events(hours: int = 1, limit: int = 50):
     """Get recent system events with metrics"""
     try:
@@ -895,33 +878,10 @@ async def get_system_events(hours: int = 1, limit: int = 50):
         METRICS['custom_errors'].labels(service='api', error_type='events').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/metrics-summary")
+@app.get("/metrics-summary", dependencies=[Depends(require_permission(Permission.READ_METRICS))])
 async def get_metrics_summary():
-    """Get system performance metrics summary"""
-    try:
-        # In real implementation, query from database or metrics store
-        return {
-            "trading_metrics": {
-                "total_trades_today": 15,
-                "successful_trades": 12,
-                "failed_trades": 3,
-                "total_pnl_today": 275.50,
-                "win_rate": 0.8
-            },
-            "system_metrics": {
-                "signals_processed": 150,
-                "orders_executed": 15,
-                "average_latency_ms": 45.2,
-                "uptime_hours": 24.5,
-                "redis_streams_active": bus.supports_streams if bus else False
-            },
-            "timestamp": datetime.utcnow()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting metrics: {e}")
-        METRICS['custom_errors'].labels(service='api', error_type='metrics_summary').inc()
-        raise HTTPException(status_code=500, detail=str(e))
+    return {'source': 'measured', 'backtests': {'completed': sum(j.status == JobStatus.COMPLETED for j in job_manager.jobs.values())}, 'trading_metrics': None}
+
 
 # Background Tasks
 async def monitor_system_events():
@@ -1001,7 +961,7 @@ async def monitor_signals():
             METRICS['custom_errors'].labels(service='api', error_type='signal_monitoring').inc()
 
 # Backtest API Endpoints
-@app.post("/backtest/jobs", response_model=Dict[str, str])
+@app.post("/backtest/jobs", response_model=Dict[str, str], dependencies=[Depends(require_permission(Permission.WRITE_BACKTEST))])
 async def create_backtest_job(
     request: BacktestRequest,
     background_tasks: BackgroundTasks,
@@ -1023,7 +983,7 @@ async def create_backtest_job(
             METRICS['custom_errors'].labels(service='api', error_type='backtest_creation').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/backtest/jobs", response_model=List[BacktestJob])
+@app.get("/backtest/jobs", response_model=List[BacktestJob], dependencies=[Depends(require_permission(Permission.READ_BACKTEST))])
 async def list_backtest_jobs(
     status: Optional[JobStatus] = None,
     limit: int = 50
@@ -1038,7 +998,7 @@ async def list_backtest_jobs(
             METRICS['custom_errors'].labels(service='api', error_type='backtest_list').inc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/backtest/jobs/{job_id}", response_model=BacktestJob)
+@app.get("/backtest/jobs/{job_id}", response_model=BacktestJob, dependencies=[Depends(require_permission(Permission.READ_BACKTEST))])
 async def get_backtest_job(job_id: str):
     """Get backtest job status and details"""
     job = job_manager.get_job(job_id)
@@ -1046,7 +1006,7 @@ async def get_backtest_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-@app.post("/backtest/jobs/{job_id}/start")
+@app.post("/backtest/jobs/{job_id}/start", dependencies=[Depends(require_permission(Permission.WRITE_BACKTEST))])
 async def start_backtest_job(job_id: str):
     """Start a queued backtest job"""
     if not job_manager.get_job(job_id):
@@ -1058,7 +1018,7 @@ async def start_backtest_job(job_id: str):
 
     return {"status": "started"}
 
-@app.post("/backtest/jobs/{job_id}/cancel")
+@app.post("/backtest/jobs/{job_id}/cancel", dependencies=[Depends(require_permission(Permission.WRITE_BACKTEST))])
 async def cancel_backtest_job(job_id: str):
     """Cancel a running backtest job"""
     if not job_manager.get_job(job_id):
@@ -1070,7 +1030,7 @@ async def cancel_backtest_job(job_id: str):
 
     return {"status": "cancelled"}
 
-@app.get("/backtest/jobs/{job_id}/results")
+@app.get("/backtest/jobs/{job_id}/results", dependencies=[Depends(require_permission(Permission.READ_BACKTEST))])
 async def get_backtest_results(job_id: str):
     """Get backtest job results"""
     job = job_manager.get_job(job_id)
@@ -1085,7 +1045,7 @@ async def get_backtest_results(job_id: str):
 
     return job.results
 
-@app.get("/backtest/jobs/{job_id}/download")
+@app.get("/backtest/jobs/{job_id}/download", dependencies=[Depends(require_permission(Permission.READ_BACKTEST))])
 async def download_backtest_results(job_id: str):
     """Download backtest results as JSON file"""
     from fastapi.responses import FileResponse
@@ -1104,7 +1064,7 @@ async def download_backtest_results(job_id: str):
         media_type="application/json"
     )
 
-@app.get("/backtest/stats")
+@app.get("/backtest/stats", dependencies=[Depends(require_permission(Permission.READ_BACKTEST))])
 async def get_backtest_stats():
     """Get backtest system statistics"""
     jobs = job_manager.jobs.values()
@@ -1123,7 +1083,7 @@ async def get_backtest_stats():
 
     return stats
 
-@app.post("/backtest/quick")
+@app.post("/backtest/quick", dependencies=[Depends(require_permission(Permission.WRITE_BACKTEST))])
 async def quick_backtest(
     symbols: str = "AAPL,GOOGL",
     days: int = 30,

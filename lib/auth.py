@@ -8,6 +8,7 @@ Implements JWT-based authentication with role-based access control (RBAC).
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from enum import Enum
+import os
 import secrets
 import hashlib
 
@@ -17,7 +18,7 @@ from passlib.context import CryptContext
 
 
 # Configuration
-SECRET_KEY = secrets.token_urlsafe(32)  # In production, use env variable
+SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or secrets.token_urlsafe(32)  # In production, use env variable
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -158,7 +159,7 @@ def create_access_token(
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -175,12 +176,17 @@ def create_refresh_token(username: str) -> str:
     return encoded_jwt
 
 
-def decode_token(token: str) -> Optional[TokenData]:
+def decode_token(token: str, expected_type: str = "access") -> Optional[TokenData]:
     """Decode and validate a JWT token."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != expected_type:
+            return None
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        if expected_type == "refresh":
+            user = get_user(username)
+            role = user.role.value if user and not user.disabled else None
         permissions: List[str] = payload.get("permissions", [])
         exp: int = payload.get("exp")
 
@@ -195,7 +201,7 @@ def decode_token(token: str) -> Optional[TokenData]:
             permissions=[Permission(p) for p in permissions],
             exp=exp_dt
         )
-    except JWTError:
+    except (JWTError, ValueError, TypeError):
         return None
 
 
@@ -240,29 +246,11 @@ USERS_DB: dict[str, UserInDB] = {}
 
 
 def _init_default_users():
-    """Initialize default users if not already present."""
-    if not USERS_DB:
-        USERS_DB["admin"] = UserInDB(
-            username="admin",
-            email="admin@trading.com",
-            full_name="System Administrator",
-            role=UserRole.ADMIN,
-            hashed_password=get_password_hash("admin123"),  # Change in production!
-        )
-        USERS_DB["trader1"] = UserInDB(
-            username="trader1",
-            email="trader1@trading.com",
-            full_name="Main Trader",
-            role=UserRole.TRADER,
-            hashed_password=get_password_hash("trader123"),
-        )
-        USERS_DB["viewer1"] = UserInDB(
-            username="viewer1",
-            email="viewer1@trading.com",
-            full_name="Portfolio Viewer",
-            role=UserRole.VIEWER,
-            hashed_password=get_password_hash("viewer123"),
-        )
+    """No shipped passwords. Bootstrap only from explicit configuration."""
+    password = os.getenv('AUTH_ADMIN_PASSWORD')
+    if password and 'admin' not in USERS_DB:
+        USERS_DB['admin'] = UserInDB(username='admin', email='admin@localhost', role=UserRole.ADMIN,
+                                     hashed_password=get_password_hash(password))
 
 # In-memory API keys database
 API_KEYS_DB: dict[str, APIKey] = {}

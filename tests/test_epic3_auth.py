@@ -160,7 +160,8 @@ class TestRBAC:
 class TestUserManagement:
     """Test user management functionality."""
 
-    def test_authenticate_valid_user(self):
+    def test_authenticate_valid_user(self, monkeypatch):
+        monkeypatch.setenv("AUTH_ADMIN_PASSWORD", "admin123")
         """Test authenticating a valid user."""
         # Using default admin user
         user = authenticate_user("admin", "admin123")

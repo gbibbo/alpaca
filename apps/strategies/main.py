@@ -49,19 +49,22 @@ class StrategyEngine:
     """Main strategy engine that manages multiple strategies across timeframes"""
 
     def __init__(self, strategies: Optional[List[Strategy]] = None):
+        os.environ["SERVICE_NAME"] = "strategies"
         self.settings = get_settings()
         self.bus = get_bus()
         self.running = False
 
         # Strategies: explicit list, else ENABLED_STRATEGIES env (comma list), else all registered
         if strategies is None:
-            enabled = [s for s in os.getenv("ENABLED_STRATEGIES", "").split(",") if s.strip()]
+            enabled = [s for s in os.getenv("ENABLED_STRATEGIES", "daily_trend").split(",") if s.strip()]
             strategies = create_strategies(enabled)
+        if self.settings.trading_mode != "backtest" and len(strategies) != 1:
+            raise ValueError("Operational mode requires one strategy; use isolated backtest accounts to compare strategies")
         self.strategies: List[Strategy] = strategies
 
         # Bars older than this only warm up indicators (no live signals from historical backfill).
         # 0 disables the check (required for historical replays through the simulator).
-        self.max_bar_age_seconds = int(os.getenv("STRATEGY_MAX_BAR_AGE_SECONDS", "0"))
+        self.max_bar_age_seconds = int(os.getenv("STRATEGY_MAX_BAR_AGE_SECONDS", "120"))
 
         # Initialize metrics for each strategy
         self.strategy_metrics = {}
@@ -134,6 +137,8 @@ class StrategyEngine:
             if history and bar.timestamp <= history[-1].timestamp:
                 logger.debug(f"Ignoring duplicate/out-of-order {bar.timeframe.value} bar for {bar.symbol} @ {bar.timestamp}")
                 return 0
+            if not bar.is_complete:
+                return 0
             history.append(bar)
             self.bars_seen[bar.timeframe] += 1
             bars = list(history)
@@ -142,8 +147,9 @@ class StrategyEngine:
 
             # Stale bars (historical backfill on restart) only warm up indicators
             if self.max_bar_age_seconds > 0:
-                age = (datetime.now(timezone.utc) - bar.timestamp).total_seconds()
-                if age > self.max_bar_age_seconds:
+                from lib.backtest import available_at
+                age = (datetime.now(timezone.utc) - available_at(bar)).total_seconds()
+                if age < 0 or age > self.max_bar_age_seconds:
                     return 0
 
             for strategy in self.get_strategies_for(bar.timeframe):

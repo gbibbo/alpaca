@@ -91,7 +91,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     """
     user = authenticate_user(form_data.username, form_data.password)
 
-    if not user:
+    if not user or user.disabled:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -133,7 +133,7 @@ async def refresh_token(refresh_token: str):
     """
     from lib.auth import decode_token
 
-    token_data = decode_token(refresh_token)
+    token_data = decode_token(refresh_token, expected_type="refresh")
 
     if not token_data:
         raise HTTPException(
@@ -143,7 +143,7 @@ async def refresh_token(refresh_token: str):
 
     # Get user
     user = get_user(token_data.username)
-    if not user:
+    if not user or user.disabled:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"

@@ -89,6 +89,7 @@ class BarResampler:
         self.bars_out += 1
         return Bar(
             symbol=symbol,
+            is_complete=b["count"] == {TimeFrame.FIVE_MINUTE: 5, TimeFrame.HOUR: 60}[tf],
             timestamp=b["start"],
             open=b["open"], high=b["high"], low=b["low"], close=b["close"],
             volume=b["volume"],

@@ -239,6 +239,14 @@ class HistoricalSimulator:
     
     def connect(self) -> bool:
         """Connect to message bus"""
+        # Safety: the isolated research engine (lib.backtest via main()) is the only supported
+        # backtest path. This legacy operational replay publishes to the SHARED bus, which in
+        # backtest mode must never happen (it could reach a live strategies/executor chain).
+        if get_settings().trading_mode == "backtest":
+            raise RuntimeError(
+                "HistoricalSimulator bus replay is disabled in backtest mode; run the isolated "
+                "engine via `python apps/simulator/main.py --csv ...` (lib.backtest.run_backtest)"
+            )
         if not connect_bus():
             logger.error("Failed to connect to message bus")
             return False
@@ -339,29 +347,21 @@ class HistoricalSimulator:
         """
         Simulate multiple symbols in parallel, maintaining chronological order
         """
-        results = {}
-        
-        # Create tasks for each symbol
-        tasks = []
-        for symbol, bars in symbol_data.items():
-            if bars:
-                task = asyncio.create_task(
-                    self.simulate_symbol(symbol, bars, real_time_delay)
-                )
-                tasks.append((symbol, task))
-        
-        # Wait for all tasks to complete
-        for symbol, task in tasks:
-            try:
-                bars_published = await task
-                results[symbol] = bars_published
-                self.stats['symbols_processed'].add(symbol)
-            except Exception as e:
-                logger.error(f"Error simulating {symbol}: {e}")
-                results[symbol] = 0
-        
-        return results
-    
+        from collections import Counter
+        counts = Counter()
+        ordered = sorted((b for values in symbol_data.values() for b in values), key=lambda b: (b.timestamp, b.symbol))
+        previous = None
+        for bar in ordered:
+            if not self.running:
+                break
+            if real_time_delay and previous:
+                await asyncio.sleep(min(5, max(0, (bar.timestamp - previous).total_seconds() / self.speed_multiplier)))
+            self.bus.publish_bar(bar)
+            counts[bar.symbol] += 1
+            previous = bar.timestamp
+        self.stats['symbols_processed'].update(counts)
+        return dict(counts)
+
     def get_stats(self) -> Dict:
         """Get simulation statistics"""
         return {
@@ -458,144 +458,29 @@ class HistoricalSimulator:
                 self.persistence.close()
 
 async def main():
-    """Main entry point for historical simulator"""
-    parser = argparse.ArgumentParser(description="Historical Data Simulator")
-    parser.add_argument("--symbols", required=True, help="Comma-separated list of symbols (e.g., AAPL,GOOGL,TSLA)")
-    parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD or ISO format)")
-    parser.add_argument("--end", help="End date (YYYY-MM-DD or ISO format)")
-    parser.add_argument("--timeframe", default="1Min", help="Data timeframe (1Min, 5Min, 1Hour, 1Day)")
-    parser.add_argument("--feed", default="iex", help="Alpaca data feed (iex, sip)")
-    parser.add_argument("--speed", type=float, default=1.0, help="Speed multiplier (1.0 = real time, 10.0 = 10x faster)")
-    parser.add_argument("--no-delays", action="store_true", help="Disable real-time delays (publish as fast as possible)")
-    parser.add_argument("--csv", help="Load data from CSV files directory instead of Alpaca")
-    parser.add_argument("--output", help="Save simulation results to JSON file")
-    parser.add_argument("--seed", type=int, help="Random seed for reproducible strategy results")
-    parser.add_argument("--persist", action="store_true", help="Enable persistence (save to SQLite/CSV/Parquet)")
-    parser.add_argument("--run-id", help="Custom run ID for persistence (default: auto-generated)")
-    
+    from lib.backtest import load_csv, ResearchConfig, run_backtest
+    import json
+    parser = argparse.ArgumentParser(description="Isolated historical portfolio backtest (never sends broker orders)")
+    parser.add_argument('--symbols', required=True)
+    parser.add_argument('--start', required=True)
+    parser.add_argument('--end')
+    parser.add_argument('--csv', required=True, help='Directory with SYMBOL.csv files')
+    parser.add_argument('--timeframe', default='1Day')
+    parser.add_argument('--strategies', default='daily_trend')
+    parser.add_argument('--initial-cash', type=float, default=100000)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--output', default='out/backtest.json')
+    parser.add_argument('--risk-params', default='{}', help='JSON risk/cost overrides')
     args = parser.parse_args()
-    
-    try:
-        # Parse symbols
-        symbols = [s.strip().upper() for s in args.symbols.split(",")]
-        logger.info(f"Simulating symbols: {symbols}")
+    config = ResearchConfig(**{**json.loads(args.risk_params), 'strategies': args.strategies.split(','),
+                              'initial_cash': args.initial_cash, 'seed': args.seed})
+    bars = load_csv(args.csv, args.symbols.split(','), args.timeframe, args.start, args.end)
+    result = run_backtest(bars, config)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2, allow_nan=False), encoding='utf-8')
+    print(json.dumps({name: account['metrics'] for name, account in result['accounts'].items()}, indent=2))
+    return 0
 
-        # Initialize simulator with persistence if requested
-        simulator = HistoricalSimulator(
-            speed_multiplier=args.speed,
-            enable_persistence=args.persist,
-            run_id=args.run_id
-        )
-        
-        if not simulator.connect():
-            logger.error("Failed to connect to message bus")
-            return 1
-
-        # Set random seed if provided
-        if args.seed is not None:
-            simulator.set_random_seed(args.seed)
-        
-        # Load data for all symbols
-        symbol_data = {}
-        
-        if args.csv:
-            # Load from CSV files
-            csv_dir = Path(args.csv)
-            if not csv_dir.exists():
-                logger.error(f"CSV directory not found: {csv_dir}")
-                return 1
-            
-            for symbol in symbols:
-                csv_file = csv_dir / f"{symbol}.csv"
-                if csv_file.exists():
-                    bars = simulator.data_loader.load_from_csv(str(csv_file), symbol, args.timeframe)
-                    symbol_data[symbol] = bars
-                else:
-                    logger.warning(f"CSV file not found for {symbol}: {csv_file}")
-        else:
-            # Load from Alpaca
-            for symbol in symbols:
-                bars = simulator.data_loader.load_from_alpaca(
-                    symbol, args.start, args.end, args.timeframe, args.feed
-                )
-                symbol_data[symbol] = bars
-        
-        if not any(symbol_data.values()):
-            logger.error("No data loaded for any symbol")
-            return 1
-        
-        # Prepare simulation parameters
-        simulation_params = {
-            "symbols": symbols,
-            "start": args.start,
-            "end": args.end,
-            "timeframe": args.timeframe,
-            "feed": args.feed,
-            "speed_multiplier": args.speed,
-            "real_time_delays": not args.no_delays,
-            "seed": args.seed,
-            "data_source": "csv" if args.csv else "alpaca"
-        }
-
-        # Run simulation
-        results = await simulator.run_simulation(
-            symbol_data,
-            real_time_delay=not args.no_delays,
-            simulation_params=simulation_params
-        )
-        
-        # Show results
-        print("\n" + "="*60)
-        print("📊 SIMULATION RESULTS")
-        print("="*60)
-        
-        for symbol, bars_count in results.items():
-            print(f"  {symbol:8} {bars_count:8,} bars")
-        
-        stats = simulator.get_stats()
-        print(f"\nTotal bars: {stats['bars_published']:,}")
-        print(f"Duration: {stats['duration_seconds']:.1f}s")
-        print(f"Speed: {args.speed}x")
-
-        # Show persistence info
-        if args.persist and simulator.persistence:
-            print(f"\n📁 Persistence enabled:")
-            print(f"   Run ID: {simulator.persistence.run_id}")
-            print(f"   Output: {simulator.persistence.run_dir}")
-            print(f"   Database: {simulator.persistence.db_path}")
-
-        # Save results if requested
-        if args.output:
-            import json
-            output_data = {
-                "simulation_stats": stats,
-                "results": results,
-                "parameters": {
-                    "symbols": symbols,
-                    "start": args.start,
-                    "end": args.end,
-                    "timeframe": args.timeframe,
-                    "feed": args.feed,
-                    "speed_multiplier": args.speed
-                }
-            }
-            
-            with open(args.output, 'w') as f:
-                json.dump(output_data, f, indent=2, default=str)
-            
-            print(f"\n📁 Results saved to: {args.output}")
-        
-        print("🎉 Simulation completed successfully!")
-        return 0
-        
-    except KeyboardInterrupt:
-        logger.info("Simulation interrupted by user")
-        return 0
-    except Exception as e:
-        logger.error(f"Simulation failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(asyncio.run(main()))

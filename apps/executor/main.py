@@ -38,8 +38,8 @@ from lib.metrics_helpers import (
 )
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide as AlpacaOrderSide, TimeInForce, OrderStatus as AlpacaOrderStatus
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, TakeProfitRequest, StopLossRequest
+from alpaca.trading.enums import OrderSide as AlpacaOrderSide, TimeInForce, OrderClass, OrderStatus as AlpacaOrderStatus
 try:
     from alpaca.common.exceptions import APIError
 except Exception:  # pragma: no cover - keeps module importable if alpaca layout changes
@@ -94,6 +94,7 @@ class AlpacaRateManager:
     """Intelligent rate manager for Alpaca API calls"""
     
     def __init__(self):
+        os.environ["SERVICE_NAME"] = "executor"
         self.settings = get_settings()
         
         # Alpaca Trading API limit: 200 requests/minute
@@ -145,7 +146,11 @@ class AlpacaRateManager:
 class OrderTracker:
     """Enhanced order tracking with FSM and partial fills support (Epic 5)"""
 
-    def __init__(self):
+    def __init__(self, journal_path=None):
+        import sqlite3
+        self.db = sqlite3.connect(journal_path or ':memory:')
+        self.db.execute('CREATE TABLE IF NOT EXISTS orders (broker_id TEXT PRIMARY KEY, intent TEXT, qty TEXT, notional TEXT, status TEXT)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, payload TEXT)')
         # Track orders by various IDs
         self.orders_by_client_id: Dict[str, Dict] = {}
         self.orders_by_broker_id: Dict[str, Dict] = {}
@@ -164,6 +169,29 @@ class OrderTracker:
         self.orders_filled = 0
         self.orders_partial = 0
         self.orders_failed = 0
+        rows = list(self.db.execute('SELECT broker_id,intent,qty,notional,status FROM orders'))
+        for broker_id, payload, qty, notional, status in rows:
+            self.add_pending_order(OrderIntent.model_validate_json(payload), broker_id)
+            self.orders_by_broker_id[broker_id].update(total_filled=Decimal(qty), total_notional=Decimal(notional), status=status)
+            self.orders_by_broker_id[broker_id]['remaining_quantity'] -= Decimal(qty)
+            if status in TERMINAL_STATUSES:
+                self.pending_orders.pop(broker_id, None)
+            self.checkpoint(broker_id)
+
+    def checkpoint(self, broker_id, fill=None):
+        order = self.orders_by_broker_id[broker_id]
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO orders VALUES (?,?,?,?,?)',
+                            (broker_id, order['intent'].model_dump_json(), str(order['total_filled']),
+                             str(order['total_notional']), order['status']))
+            if fill:
+                self.db.execute('INSERT OR IGNORE INTO outbox VALUES (?,?)', (str(fill.fill_id), fill.model_dump_json()))
+
+    def drain_outbox(self, bus):
+        for fill_id, payload in list(self.db.execute('SELECT id,payload FROM outbox ORDER BY rowid')):
+            bus.publish_order_fill(OrderFill.model_validate_json(payload))
+            with self.db:
+                self.db.execute('DELETE FROM outbox WHERE id=?', (fill_id,))
         
     def add_pending_order(self, order_intent: OrderIntent, broker_order_id: str):
         """Add order to tracking with FSM (Epic 5)"""
@@ -179,6 +207,7 @@ class OrderTracker:
             "status": "submitted",
             "fills": [],
             "total_filled": Decimal('0'),
+            "total_notional": Decimal('0'),
             "remaining_quantity": order_intent.quantity,
             "fsm": fsm  # Reference to FSM
         }
@@ -188,6 +217,7 @@ class OrderTracker:
         self.pending_orders[broker_order_id] = order_intent
 
         self.orders_submitted += 1
+        self.checkpoint(broker_order_id)
         logger.debug(f"Tracking order with FSM: {order_intent.client_order_id} -> {broker_order_id} (state: {fsm.current_state})")
     
     def update_order_status(self, broker_order_id: str, status: str, filled_qty: Decimal = None,
@@ -207,6 +237,13 @@ class OrderTracker:
         new_fill_qty = Decimal('0')
         if filled_qty is not None and filled_qty > 0 and fill_price:
             new_fill_qty = Decimal(str(filled_qty)) - order_data["total_filled"]
+
+        cumulative_notional = Decimal(str(filled_qty or 0)) * Decimal(str(fill_price or 0))
+        if new_fill_qty > 0:
+            fill_price = (cumulative_notional - order_data.get("total_notional", Decimal(0))) / new_fill_qty
+            if fill_price <= 0:
+                raise ValueError("Invalid cumulative broker fill notional")
+            order_data["total_notional"] = cumulative_notional
 
         # Epic 5: Update FSM state
         fsm = self.order_fsms.get(broker_order_id)
@@ -240,7 +277,9 @@ class OrderTracker:
             order_data["remaining_quantity"] = order_intent.quantity - order_data["total_filled"]
 
             # Create OrderFill object
+            from uuid import uuid5, NAMESPACE_URL
             order_fill = OrderFill(
+                fill_id=uuid5(NAMESPACE_URL, f"{broker_order_id}:{order_data['total_filled']}"),
                 symbol=order_intent.symbol,
                 timestamp=TimeUtils.utc_now(),
                 side=order_intent.side,
@@ -264,6 +303,7 @@ class OrderTracker:
                 self.orders_partial += 1
                 logger.info(f"Partial fill: {order_intent.client_order_id} - {order_data['total_filled']}/{order_intent.quantity}")
 
+            self.checkpoint(broker_order_id, order_fill)
             return order_fill
 
         # Handle failed/cancelled orders (Alpaca spells it 'canceled')
@@ -275,6 +315,7 @@ class OrderTracker:
             # Already accounted for (repeated poll)
             self.pending_orders.pop(broker_order_id, None)
 
+        self.checkpoint(broker_order_id)
         return None
     
     def get_pending_orders(self) -> List[str]:
@@ -337,7 +378,8 @@ class EnhancedAlpacaExecutor:
         # Enhanced services
         self.deduplication = get_deduplication_service()
         self.rate_manager = AlpacaRateManager()
-        self.order_tracker = OrderTracker()
+        Path('data').mkdir(exist_ok=True)
+        self.order_tracker = OrderTracker(os.getenv('EXECUTOR_JOURNAL', 'data/executor.sqlite'))
 
         # Initialize metrics
         self.metrics = ExecutorMetrics()
@@ -606,7 +648,38 @@ class EnhancedAlpacaExecutor:
                 logger.error(f"Error checking position for {symbol}: {e}")
                 return False, Decimal('0')
     
-    async def execute_order_with_validation(self, order_intent: OrderIntent) -> Optional[OrderFill]:
+    async def execute_order_with_validation(self, order_intent):
+        from lib.execution_safety import verify_mode
+        verify_mode(self.settings)
+        from uuid import uuid4
+        redis = self.bus.redis_client
+        token = str(uuid4())
+        # One final validation/submission at a time across executors.
+        if not redis.set('trading:submission_lock', token, nx=True, ex=120):
+            raise RuntimeError('Another executor is validating an order')
+        self._submission_token = token
+        try:
+            return await self._execute_order_unlocked(order_intent)
+        finally:
+            # WATCH prevents deleting a newer owner's lock.
+            with redis.pipeline() as pipe:
+                pipe.watch('trading:submission_lock')
+                if pipe.get('trading:submission_lock') == token:
+                    pipe.multi()
+                    pipe.delete('trading:submission_lock')
+                    pipe.execute()
+
+    def _submit_guarded(self, intent, request):
+        from lib.execution_safety import check_order
+        redis = self.bus.redis_client
+        if redis.get('trading:submission_lock') != self._submission_token:
+            raise RuntimeError('Submission lease expired')
+        check_order(self.trading_client, redis, self.settings, intent)
+        if redis.get('trading:emergency_stop'):
+            raise RuntimeError('Emergency stop is active')
+        return self.trading_client.submit_order(request)
+
+    async def _execute_order_unlocked(self, order_intent: OrderIntent) -> Optional[OrderFill]:
         """Execute order with comprehensive validation and error handling"""
         # Start order execution timing
         with time_order_execution(order_intent.symbol, order_intent.order_type.value):
@@ -671,38 +744,27 @@ class EnhancedAlpacaExecutor:
                 # Convert order side
                 alpaca_side = self.convert_side(order_intent.side)
 
-                # Create order request based on type
-                if order_intent.order_type == OrderType.MARKET:
-                    order_request = MarketOrderRequest(
-                        symbol=order_intent.symbol,
-                        qty=float(order_intent.quantity),  # Alpaca expects float
-                        side=alpaca_side,
-                        time_in_force=TimeInForce.DAY,
-                        client_order_id=order_intent.client_order_id
-                    )
-            
-                elif order_intent.order_type == OrderType.LIMIT:
-                    if not order_intent.price:
-                        logger.error("Limit order requires price")
-                        return None
-
-                    order_request = LimitOrderRequest(
-                        symbol=order_intent.symbol,
-                        qty=float(order_intent.quantity),
-                        side=alpaca_side,
-                        time_in_force=TimeInForce.DAY,
-                        limit_price=float(order_intent.price),
-                        client_order_id=order_intent.client_order_id
-                    )
-            
-                else:
-                    logger.error(f"Unsupported order type: {order_intent.order_type}")
-                    return None
+                if not order_intent.price:
+                    raise ValueError('Reference price required for bounded execution')
+                collar = Decimal(order_intent.max_slippage_bps or 0) / Decimal(10000)
+                limit = order_intent.price * (1 + collar if order_intent.side == SignalSide.BUY else 1 - collar)
+                if order_intent.order_type == OrderType.LIMIT:
+                    limit = order_intent.price
+                extras = {}
+                if order_intent.side == SignalSide.BUY:
+                    if not order_intent.stop_loss or not order_intent.take_profit:
+                        raise ValueError('Buy orders require protective exits')
+                    extras = dict(order_class=OrderClass.BRACKET,
+                                  stop_loss=StopLossRequest(stop_price=float(order_intent.stop_loss)),
+                                  take_profit=TakeProfitRequest(limit_price=float(order_intent.take_profit)))
+                order_request = LimitOrderRequest(symbol=order_intent.symbol, qty=float(order_intent.quantity),
+                    side=alpaca_side, time_in_force=TimeInForce.GTC, limit_price=float(limit.quantize(Decimal('.01'))),
+                    client_order_id=order_intent.client_order_id, **extras)
 
                 # Submit order with retry logic
                 order_response = await self._execute_with_retry(
                     operation="submit_order",
-                    func=lambda: self.trading_client.submit_order(order_request),
+                    func=lambda: self._submit_guarded(order_intent, order_request),
                     description=f"Order submission for {order_intent.symbol}"
                 )
 
@@ -753,7 +815,7 @@ class EnhancedAlpacaExecutor:
                     }
                 )
 
-                return None
+                raise
     
     async def monitor_pending_orders(self):
         """Monitor pending orders for fills, status updates and timeouts (Epic 5)"""
@@ -761,6 +823,13 @@ class EnhancedAlpacaExecutor:
 
         while self.running:
             try:
+                self.order_tracker.drain_outbox(self.bus)
+                if self.bus.redis_client.get('trading:emergency_stop'):
+                    for broker_id in list(self.order_tracker.get_pending_orders()):
+                        intent = self.order_tracker.orders_by_broker_id[broker_id]['intent']
+                        if intent.side == SignalSide.BUY:
+                            self.trading_client.cancel_order_by_id(broker_id)
+                    self.bus.redis_client.set('trading:stop_ack', TimeUtils.utc_now().isoformat())
                 # Epic 5: Check for order timeouts FIRST
                 timed_out = await self.order_tracker.check_timeouts()
 
@@ -823,7 +892,7 @@ class EnhancedAlpacaExecutor:
 
             if order_fill:
                 # Mark fill as processed to prevent duplicates
-                if self.deduplication.mark_fill_processed(order_fill):
+                if not self.deduplication.is_fill_processed(order_fill):
                     # Record fill metrics
                     fill_type = "full" if order_fill.fill_quantity == order_fill.quantity else "partial"
                     self.metrics.order_filled(
@@ -834,7 +903,7 @@ class EnhancedAlpacaExecutor:
                     )
 
                     # Publish fill event
-                    self.bus.publish_order_fill(order_fill)
+                    self.order_tracker.drain_outbox(self.bus)
 
                     logger.info(f"✅ Order fill published: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
                     
@@ -894,14 +963,17 @@ class EnhancedAlpacaExecutor:
 
                     # Execute order
                     order_fill = await self.execute_order_with_validation(order_intent)
+                    if order_intent.client_order_id not in self.order_tracker.orders_by_client_id:
+                        raise RuntimeError('Intent not submitted; retry required')
+                    self.order_tracker.drain_outbox(self.bus)
                     self.deduplication.mark_order_executed(
                         order_intent, order_fill.broker_order_id if order_fill else None
                     )
 
                     if order_fill:
                         # Mark fill as processed and publish
-                        if self.deduplication.mark_fill_processed(order_fill):
-                            self.bus.publish_order_fill(order_fill)
+                        if not self.deduplication.is_fill_processed(order_fill):
+                            self.order_tracker.drain_outbox(self.bus)
                             logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
                         else:
                             logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
@@ -938,14 +1010,17 @@ class EnhancedAlpacaExecutor:
 
                     # Execute order
                     order_fill = await self.execute_order_with_validation(order_intent)
+                    if order_intent.client_order_id not in self.order_tracker.orders_by_client_id:
+                        raise RuntimeError('Intent not submitted; retry required')
+                    self.order_tracker.drain_outbox(self.bus)
                     self.deduplication.mark_order_executed(
                         order_intent, order_fill.broker_order_id if order_fill else None
                     )
 
                     if order_fill:
                         # Mark fill as processed and publish
-                        if self.deduplication.mark_fill_processed(order_fill):
-                            self.bus.publish_order_fill(order_fill)
+                        if not self.deduplication.is_fill_processed(order_fill):
+                            self.order_tracker.drain_outbox(self.bus)
                             logger.info(f"✅ Order executed and published: {order_fill.symbol} {order_fill.fill_quantity}@${order_fill.fill_price:.2f}")
                         else:
                             logger.debug(f"Fill already processed: {order_fill.broker_order_id}")
@@ -989,6 +1064,8 @@ class EnhancedAlpacaExecutor:
         # Mark service start in metrics
         self.metrics.mark_service_start()
 
+        from lib.execution_safety import verify_mode
+        verify_mode(self.settings)
         # Verify account status
         try:
             account = await self.verify_account_status()

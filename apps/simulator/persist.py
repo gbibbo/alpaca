@@ -377,51 +377,22 @@ class BacktestPersistence:
         cursor.execute(f"SELECT COUNT(*) FROM fills WHERE run_id = ?", (self.run_id,))
         fills_count = cursor.fetchone()[0]
 
-        # Get equity stats
-        cursor.execute(f"""
-            SELECT MIN(equity), MAX(equity),
-                   (MAX(equity) - MIN(equity)) / MIN(equity) * 100 as return_pct
-            FROM equity WHERE run_id = ?
-        """, (self.run_id,))
-        equity_stats = cursor.fetchone()
-
-        # Get final equity
-        cursor.execute(f"""
-            SELECT equity, total_pnl, realized_pnl, unrealized_pnl
-            FROM equity WHERE run_id = ?
-            ORDER BY timestamp DESC LIMIT 1
-        """, (self.run_id,))
-        final_equity = cursor.fetchone()
-
-        # Get win rate (simplified - based on realized PnL)
-        cursor.execute(f"""
-            SELECT
-                COUNT(CASE WHEN price > 0 THEN 1 END) as winning_trades,
-                COUNT(*) as total_trades
-            FROM fills WHERE run_id = ?
-        """, (self.run_id,))
-        trade_stats = cursor.fetchone()
-
+        from lib.portfolio import Portfolio
+        cursor.execute("SELECT equity, total_pnl, realized_pnl, unrealized_pnl FROM equity WHERE run_id=? ORDER BY timestamp, id", (self.run_id,))
+        curve = cursor.fetchall()
+        initial = curve[0][0] if curve else None
+        final = curve[-1] if curve else (None, None, None, None)
+        ledger = Portfolio(initial or 1)
+        cursor.execute("SELECT fill_id, symbol, side, quantity, price, commission, timestamp FROM fills WHERE run_id=? ORDER BY timestamp, id", (self.run_id,))
+        for row in cursor.fetchall():
+            ledger.fill(*row)
         return {
-            "run_id": self.run_id,
-            "bars_count": bars_count,
-            "signals_count": signals_count,
-            "orders_count": orders_count,
-            "fills_count": fills_count,
-            "equity": {
-                "initial": equity_stats[0] if equity_stats else 0,
-                "final": final_equity[0] if final_equity else 0,
-                "max": equity_stats[1] if equity_stats else 0,
-                "return_pct": equity_stats[2] if equity_stats and equity_stats[2] else 0,
-                "total_pnl": final_equity[1] if final_equity else 0,
-                "realized_pnl": final_equity[2] if final_equity else 0,
-                "unrealized_pnl": final_equity[3] if final_equity else 0,
-            },
-            "trades": {
-                "total": trade_stats[1] if trade_stats else 0,
-                "winning": trade_stats[0] if trade_stats else 0,
-                "win_rate": (trade_stats[0] / max(1, trade_stats[1])) * 100 if trade_stats else 0,
-            }
+            "run_id": self.run_id, "bars_count": bars_count, "signals_count": signals_count,
+            "orders_count": orders_count, "fills_count": fills_count,
+            "equity": {"initial": initial, "final": final[0], "max": max((r[0] for r in curve), default=None),
+                       "return_pct": (final[0] / initial - 1) * 100 if initial else None,
+                       "total_pnl": final[1], "realized_pnl": final[2], "unrealized_pnl": final[3]},
+            "trades": ledger.trade_stats(),
         }
 
     def export_to_csv(self):
