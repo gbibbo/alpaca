@@ -9,6 +9,7 @@ NEW: Prometheus metrics integration for observability
 import os
 import sys
 import asyncio
+import re
 import uuid
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -145,7 +146,12 @@ class BacktestRequest(BaseModel):
         candidate = Path(self.csv_dir).resolve()
         if not candidate.is_relative_to(root):
             raise ValueError('csv_dir must be inside the repository data directory')
-        if not self.symbols or any(not symbol.isalnum() for symbol in self.symbols):
+        # A point-in-time universe CSV, if provided, must also stay inside data/.
+        universe_csv = (self.risk_params or {}).get('universe_csv')
+        if universe_csv and not Path(universe_csv).resolve().is_relative_to(root):
+            raise ValueError('universe_csv must be inside the repository data directory')
+        # Accept the Bar ticker scheme (letters, digits, dots -> BRK.B), reject traversal.
+        if not self.symbols or any(not re.fullmatch(r'[A-Za-z0-9.]+', s) or '..' in s for s in self.symbols):
             raise ValueError('Invalid symbols')
         start = datetime.fromisoformat(self.start_date.replace('Z', '+00:00'))
         if self.end_date and datetime.fromisoformat(self.end_date.replace('Z', '+00:00')) <= start:

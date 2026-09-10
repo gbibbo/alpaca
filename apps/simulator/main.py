@@ -471,8 +471,13 @@ async def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output', default='out/backtest.json')
     parser.add_argument('--risk-params', default='{}', help='JSON risk/cost overrides')
+    parser.add_argument('--universe-csv', help='Point-in-time index membership CSV (date,symbol) '
+                                               'for portfolio strategies; fixes survivorship bias')
     args = parser.parse_args()
-    config = ResearchConfig(**{**json.loads(args.risk_params), 'strategies': args.strategies.split(','),
+    overrides = json.loads(args.risk_params)
+    if args.universe_csv:
+        overrides['universe_csv'] = args.universe_csv
+    config = ResearchConfig(**{**overrides, 'strategies': args.strategies.split(','),
                               'initial_cash': args.initial_cash, 'seed': args.seed})
     bars = load_csv(args.csv, args.symbols.split(','), args.timeframe, args.start, args.end)
     result = run_backtest(bars, config)
