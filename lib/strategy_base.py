@@ -47,6 +47,10 @@ class Strategy(ABC):
     cooldown_seconds: Optional[int] = None       # None -> 5 bars worth of time
     min_confidence: float = 0.5        # signals below this are discarded by the engine
     description: str = ""
+    # --- intraday contract (used by the engine's dedicated intraday path) ---
+    intraday: bool = False             # True routes to run_intraday_account (RTH, no overnight)
+    exit_at_session_close: bool = True # force-flatten at the session's last bar close
+    max_holding_bars: Optional[int] = None  # default time-based exit when a signal omits hold_bars
 
     def __init__(self, **params):
         self.params = params
@@ -67,8 +71,12 @@ class Strategy(ABC):
         pass
 
     # --- helpers ---
+    def on_session_start(self, symbol: str) -> None:
+        """Hook called by the intraday engine at the first bar of each regular session, so a
+        strategy can reset per-session state (e.g. an opening range). No-op by default."""
+
     def make_signal(self, symbol: str, side: SignalSide, confidence: float, bars: List[Bar],
-                    metadata: Optional[dict] = None) -> Signal:
+                    metadata: Optional[dict] = None, hold_bars: Optional[int] = None) -> Signal:
         latest = bars[-1]
         meta = {
             "strategy": self.name,
@@ -90,6 +98,7 @@ class Strategy(ABC):
             expire_seconds=self.signal_expiry_seconds,
             source=self.name,
             timeframe=self.timeframe,
+            hold_bars=hold_bars if hold_bars is not None else self.max_holding_bars,
             metadata=meta,
         )
 

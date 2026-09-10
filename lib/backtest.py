@@ -377,6 +377,136 @@ def run_portfolio_account(name, ordered, config):
             "unfilled_at_end": len(pending), "kind": "portfolio"}
 
 
+def _intraday_fill(ledger, name, sym, side, qty, ref, config, ts):
+    price = _fill_price(ref, side, config)
+    fee, slc, spc = _fill_costs(ref, side, qty, price, config)
+    ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat(), slc, spc)
+    return price
+
+
+def run_intraday_account(name, ordered, config, strategy):
+    """Dedicated intraday execution path with a first-class time-based / session-close exit
+    contract. Regular trading hours only (the input bars should already be RTH). Rules:
+      - decisions use only CLOSED, COMPLETE bars; never the same bar before its close;
+      - an entry signal fills at the NEXT bar's open (never the signalling bar);
+      - a position exits after Signal.hold_bars bars (at that bar's open), and is force-flattened
+        at the session's last bar CLOSE (no overnight);
+      - per-session strategy state is reset via strategy.on_session_start at each session's open.
+    Long-only; whole shares; sized to max_position_size at decision time.
+    """
+    if strategy.timeframe != ordered[0].timeframe:
+        raise ValueError(f"{name} requires {strategy.timeframe.value}; supply matching closed bars")
+    ledger = Portfolio(config.initial_cash)
+    symbols = sorted({b.symbol for b in ordered})
+    buy_cost_factor = (1 + D(config.slippage_bps) / 10000 + D(config.spread_bps) / 20000) * (1 + D(config.commission_bps) / 10000)
+
+    # last bar timestamp of each (symbol, session) -> where a forced close must happen
+    last_of_session = defaultdict(dict)
+    for b in ordered:
+        sd = session_date_of(b)
+        if b.timestamp > last_of_session[b.symbol].get(sd, b.timestamp - timedelta(seconds=1)):
+            last_of_session[b.symbol][sd] = b.timestamp
+
+    hist = defaultdict(list)
+    st = {s: {"session": None, "seq": 0, "entry_seq": None, "hold": None, "pending": None,
+              "entry_ts": None, "entry_px": None} for s in symbols}
+    curve, signals, rejections, trades = [], [], [], []
+
+    def _open_trade(sym, price, ts):
+        st[sym]["entry_ts"], st[sym]["entry_px"] = ts, float(price)
+
+    def _close_trade(sym, price, ts, reason):
+        s = st[sym]
+        if s["entry_ts"] is not None:
+            trades.append({"symbol": sym, "entry": s["entry_ts"].isoformat(), "exit": ts.isoformat(),
+                           "holding_seconds": (ts - s["entry_ts"]).total_seconds(),
+                           "entry_price": s["entry_px"], "exit_price": float(price), "exit_reason": reason})
+        s["entry_ts"] = s["entry_px"] = s["entry_seq"] = s["hold"] = None
+
+    for ts, batch in groupby(ordered, key=lambda b: b.timestamp):
+        batch = list(batch)
+        for bar in batch:
+            ledger.mark(bar.symbol, bar.open)
+        for bar in batch:
+            sym = bar.symbol
+            s = st[sym]
+            sd = session_date_of(bar)
+            is_last = last_of_session[sym][sd] == bar.timestamp
+            vol_cap = int(bar.volume * config.max_volume_participation)
+
+            if s["session"] != sd:                      # new session: reset per-session state
+                s.update(session=sd, seq=0, entry_seq=None, hold=None, pending=None)
+                strategy.on_session_start(sym)
+            else:
+                s["seq"] += 1
+            hist[sym].append(bar)
+            if len(hist[sym]) > strategy.max_history:
+                hist[sym] = hist[sym][-strategy.max_history:]
+
+            held = int(ledger.positions.get(sym, D(0)))
+            # (1) time-based exit at THIS bar's open
+            if held > 0 and s["entry_seq"] is not None and s["hold"] is not None and (s["seq"] - s["entry_seq"]) >= s["hold"]:
+                qty = min(held, vol_cap)
+                if qty > 0:
+                    px = _intraday_fill(ledger, name, sym, "SELL", qty, bar.open, config, ts)
+                    vol_cap -= qty
+                    if int(ledger.positions.get(sym, D(0))) <= 0:
+                        _close_trade(sym, px, ts, "time")
+                held = int(ledger.positions.get(sym, D(0)))
+            # (2) pending entry at THIS bar's open (only if flat and not the last bar of the session)
+            if s["pending"] is not None:
+                if held <= 0 and not is_last:
+                    qty = min(s["pending"]["qty"], vol_cap)
+                    if qty > 0:
+                        px = _intraday_fill(ledger, name, sym, "BUY", qty, bar.open, config, ts)
+                        vol_cap -= qty
+                        s["entry_seq"], s["hold"] = s["seq"], s["pending"]["hold"]
+                        _open_trade(sym, px, ts)
+                        held = int(ledger.positions.get(sym, D(0)))
+                s["pending"] = None
+            # (3) forced session-close flatten at THIS bar's CLOSE (no overnight; full size)
+            if held > 0 and is_last and strategy.exit_at_session_close:
+                px = _intraday_fill(ledger, name, sym, "SELL", held, bar.close, config, ts)
+                _close_trade(sym, px, ts, "session_close")
+                held = 0
+            # (4) decision on this CLOSED, COMPLETE bar (flat, not the last bar)
+            if getattr(bar, "is_complete", True) and held <= 0 and s["pending"] is None and not is_last:
+                signal = strategy.analyze(sym, hist[sym])
+                if signal is not None and str(getattr(signal.side, "value", signal.side)).upper() == "BUY" \
+                        and float(signal.confidence) >= strategy.min_confidence:
+                    budget = min(ledger.equity * D(config.max_position_size), max(D(0), ledger.cash))
+                    qty = int(budget / (bar.close * buy_cost_factor)) if bar.close > 0 else 0
+                    if qty > 0:
+                        s["pending"] = {"qty": qty, "hold": signal.hold_bars}
+                        at = available_at(bar)
+                        signals.append({"symbol": sym, "side": "BUY", "timestamp": at.isoformat(),
+                                        "quantity_requested": qty, "hold_bars": signal.hold_bars})
+                    else:
+                        rejections.append({"symbol": sym, "timestamp": ts.isoformat(), "reason": "size_zero"})
+            ledger.mark(sym, bar.close)
+        curve.append(ledger.snapshot(max(b.timestamp for b in batch).isoformat()))
+
+    metrics = performance(ledger, curve, config)
+    holds = [t["holding_seconds"] for t in trades]
+    n_sessions = len({session_date_of(b) for b in ordered})
+    metrics["intraday"] = {
+        "trades": len(trades), "trades_per_day": len(trades) / n_sessions if n_sessions else None,
+        "sessions": n_sessions,
+        "avg_holding_seconds": mean(holds) if holds else None,
+        "median_holding_seconds": (sorted(holds)[len(holds) // 2]) if holds else None,
+        "overnight_positions": 0,   # forced-close guarantees flat at each session end
+        "pnl_per_unit_turnover": (metrics["net_return_pct"] / (metrics["turnover"] * 100))
+        if metrics["turnover"] else None,
+    }
+    return {"metrics": metrics, "equity_curve": curve, "fills": ledger.fills, "signals": signals,
+            "rejections": rejections, "trades": trades,
+            "final_portfolio": ledger.snapshot(curve[-1]["timestamp"]),
+            "warmup_bars": strategy.lookback_bars,
+            "first_fill_timestamp": ledger.fills[0]["timestamp"] if ledger.fills else None,
+            "walk_forward": walk_forward_report(curve, config.walk_forward_folds),
+            "kind": "intraday"}
+
+
 def run_backtest(bars, config):
     config = ResearchConfig.model_validate(config) if isinstance(config, dict) else config
     validate_data(bars)
@@ -390,6 +520,10 @@ def run_backtest(bars, config):
             accounts[name] = run_portfolio_account(name, ordered, config)
             continue
         strategy = create_strategies([name])[0] if name not in ("cash", "buy_and_hold") else None
+        if strategy is not None and getattr(strategy, "intraday", False):
+            strategy.set_seed(config.seed)
+            accounts[name] = run_intraday_account(name, ordered, config, strategy)
+            continue
         if strategy:
             strategy.set_seed(config.seed)
             if strategy.timeframe != ordered[0].timeframe:

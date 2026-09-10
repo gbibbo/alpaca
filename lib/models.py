@@ -151,6 +151,9 @@ class Signal(BaseModel):
     expire_seconds: int = Field(gt=0, default=300)  # 5 minutes default
     source: str = Field(min_length=1, max_length=50)
     timeframe: TimeFrame = TimeFrame.MINUTE  # bar timeframe the strategy looked at
+    # First-class time-based exit for intraday strategies: exit after this many bars (None =
+    # hold until the intraday engine's forced session-close flatten). Not hidden in metadata.
+    hold_bars: Optional[int] = Field(gt=0, default=None)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('confidence', mode='before')
