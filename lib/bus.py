@@ -336,15 +336,27 @@ class MessageBus:
     """
 
     def __init__(self, redis_client=None, force_backend=None):
+        # Determine backend first so durable-operation checks can run before connecting.
+        config = _get_bus_config()
+        self.backend_type = force_backend or config["backend"]
+
+        # Durable operation guard: paper/live trading must not run on a fire-and-forget Pub/Sub
+        # bus or an in-process fakeredis (messages published before a consumer subscribes are
+        # lost, and fakeredis never crosses processes). Streams on real Redis is required.
+        settings = get_settings()
+        if settings.trading_mode in ("paper", "live"):
+            if config["use_fake"] or settings.use_fake_redis:
+                raise RuntimeError(f"trading_mode={settings.trading_mode} requires real Redis, not fakeredis")
+            if self.backend_type != "streams":
+                raise RuntimeError(
+                    f"trading_mode={settings.trading_mode} requires BUS_BACKEND=streams for durable "
+                    f"delivery (got '{self.backend_type}')")
+
         self.redis_client = redis_client or _connect_redis()
 
         # Store Redis connection details for Streams backend (same source of truth as pubsub client)
-        self.redis_url = os.getenv("REDIS_URL", get_settings().redis_url)
+        self.redis_url = os.getenv("REDIS_URL", settings.redis_url)
         self.redis_db = int(os.getenv("REDIS_DB", "0"))
-
-        # Determine backend
-        config = _get_bus_config()
-        self.backend_type = force_backend or config["backend"]
 
         # Initialize appropriate backend
         if self.backend_type == "streams":
