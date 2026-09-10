@@ -29,7 +29,7 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 - **done** — Metrics added: drawdown duration, avg/max exposure, avg win/loss; per-account `first_fill_timestamp`/`warmup_bars`; explicit warmup-comparability and no-OOS notes (`77338f0`).
 - **partial** — Intrabar realism (gaps, simultaneous stop/target, partial fills): stop-first tie-break, entry-bar risk and resting stops modeled; full tick-accurate sequencing is not derivable from OHLC and stays declared as a limitation.
 - **pending** — Warmup vs. evaluation window: disclosed via `first_fill_timestamp`, but a shared warmup/evaluation split for like-for-like benchmark comparison is not implemented.
-- **pending** — Walk-forward, out-of-sample, confidence intervals; dividends/splits/tax ledger; point-in-time universe / survivorship. Declared in the result JSON assumptions; not implemented.
+- **partial** — Walk-forward **consistency report** implemented: `walk_forward_folds` scores the same fixed-parameter strategy over N contiguous sub-periods (per-window return/drawdown + aggregate mean/stdev/min/max/fraction-positive). **Pending**: walk-forward *optimization* (there is no fitting step), confidence intervals, dividends/splits/tax ledger, point-in-time universe / survivorship.
 
 ## P1 — services / API / auth / UI
 - **done** — Retired legacy `/backtest/quick`; download route requires `READ_BACKTEST` (`94fea7d`).

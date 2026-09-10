@@ -41,6 +41,7 @@ class ResearchConfig(BaseModel):
     commission_bps: float = Field(default=1, ge=0, le=1000)
     max_volume_participation: float = Field(default=.01, gt=0, le=1)
     risk_free_rate: float = Field(default=0, ge=-.1, le=1)
+    walk_forward_folds: int = Field(default=1, ge=1, le=52)
 
     @model_validator(mode="after")
     def unique(self):
@@ -166,6 +167,43 @@ def performance(ledger, curve, config):
             "undefined_metrics": "null for insufficient history or zero denominator; CAGR requires >=365 days"}
 
 
+def walk_forward_report(curve, folds):
+    """Out-of-sample consistency: the same fixed-parameter strategy scored over `folds`
+    contiguous, equal-length sub-periods of the equity curve. Strategies here take no fitting
+    step, so this is not walk-forward *optimization*; it shows whether results hold across time
+    or hinge on one window. Returns None when there is too little history to split.
+    """
+    n = len(curve)
+    if folds < 2 or n < folds * 2:
+        return None
+    size = n // folds
+    windows, rets = [], []
+    for k in range(folds):
+        lo, hi = k * size, ((k + 1) * size if k < folds - 1 else n)
+        seg = curve[lo:hi]
+        start_eq, end_eq = seg[0]["equity"], seg[-1]["equity"]
+        r = (end_eq / start_eq - 1) if start_eq > 0 else None
+        peak, dd = start_eq, 0.0
+        for row in seg:
+            peak = max(peak, row["equity"])
+            dd = max(dd, 1 - row["equity"] / peak) if peak > 0 else dd
+        windows.append({"from": seg[0]["timestamp"], "to": seg[-1]["timestamp"],
+                        "return_pct": r * 100 if r is not None else None,
+                        "max_drawdown_pct": dd * 100})
+        if r is not None:
+            rets.append(r)
+    aggregate = {"folds": folds,
+                 "mean_return_pct": mean(rets) * 100 if rets else None,
+                 "stdev_return_pct": stdev(rets) * 100 if len(rets) > 1 else None,
+                 "min_return_pct": min(rets) * 100 if rets else None,
+                 "max_return_pct": max(rets) * 100 if rets else None,
+                 "fraction_positive": sum(r > 0 for r in rets) / len(rets) if rets else None}
+    return {"windows": windows, "aggregate": aggregate,
+            "note": "same fixed-parameter strategy over contiguous sub-periods; consistency "
+                    "across windows matters more than any single window, and this is still "
+                    "in-sample selection unless the strategy was chosen before seeing this data"}
+
+
 def run_backtest(bars, config):
     config = ResearchConfig.model_validate(config) if isinstance(config, dict) else config
     validate_data(bars)
@@ -288,6 +326,7 @@ def run_backtest(bars, config):
                           "final_portfolio": ledger.snapshot(curve[-1]["timestamp"]),
                           "warmup_bars": strategy.lookback_bars if strategy else 0,
                           "first_fill_timestamp": ledger.fills[0]["timestamp"] if ledger.fills else None,
+                          "walk_forward": walk_forward_report(curve, config.walk_forward_folds),
                           "unfilled_at_end": len(pending)}
     payload = {"schema_version": 1, "mode": "backtest", "config": config.model_dump(),
                "data_sha256": data_hash, "bars_count": len(ordered), "accounts": accounts,
@@ -299,7 +338,8 @@ def run_backtest(bars, config):
                                "Benchmarks (cash, buy_and_hold) act from the first bar while strategies wait for "
                                "their lookback, so per-account returns may span different windows; compare "
                                "first_fill_timestamp before ranking",
-                               "No walk-forward or out-of-sample split; a single in-sample pass is not predictive evidence",
+                               "Optional walk_forward_folds reports per-sub-period consistency, but strategies take "
+                               "no fitting step and selection is still in-sample unless chosen before seeing this data",
                                "OHLC cannot establish intrabar execution sequence; results are hypothetical"]}
     payload["result_sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return payload

@@ -111,6 +111,35 @@ class TestFutureIndependence:
         assert forward["result_sha256"] == reversed_input["result_sha256"]
 
 
+class TestWalkForward:
+    def _series(self, n=40):
+        start = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+        return [Bar(symbol="TEST", timestamp=start + timedelta(minutes=i), timeframe=TimeFrame.MINUTE,
+                    open=100 + i, high=101 + i, low=99 + i, close=100 + i, volume=100000) for i in range(n)]
+
+    def test_folds_report_shape(self):
+        cfg = ResearchConfig(strategies=["buy_and_hold"], initial_cash=100000, walk_forward_folds=4)
+        acc = run_backtest(self._series(), cfg)["accounts"]["buy_and_hold"]
+        wf = acc["walk_forward"]
+        assert wf is not None
+        assert len(wf["windows"]) == 4
+        assert wf["aggregate"]["folds"] == 4
+        for key in ("mean_return_pct", "stdev_return_pct", "min_return_pct", "fraction_positive"):
+            assert key in wf["aggregate"]
+        # windows are contiguous and ordered
+        tss = [w["from"] for w in wf["windows"]]
+        assert tss == sorted(tss)
+
+    def test_single_fold_is_none(self):
+        cfg = ResearchConfig(strategies=["buy_and_hold"], initial_cash=100000)  # folds default 1
+        acc = run_backtest(self._series(), cfg)["accounts"]["buy_and_hold"]
+        assert acc["walk_forward"] is None
+
+    def test_determinism_with_folds(self):
+        cfg = ResearchConfig(strategies=["buy_and_hold"], initial_cash=100000, walk_forward_folds=5)
+        assert run_backtest(self._series(), cfg) == run_backtest(self._series(), cfg)
+
+
 class TestMetrics:
     def test_new_metrics_present(self):
         start = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
