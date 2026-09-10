@@ -43,6 +43,9 @@ class ResearchConfig(BaseModel):
     take_profit_pct: float | None = Field(default=.06, gt=0, lt=10)
     slippage_bps: float = Field(default=5, ge=0, le=1000)
     commission_bps: float = Field(default=1, ge=0, le=1000)
+    # Explicit half-spread cost paid on each side (bps of notional). Default 0 preserves prior
+    # results; set it for 1m/5m research where the spread dominates the cost budget.
+    spread_bps: float = Field(default=0, ge=0, le=1000)
     max_volume_participation: float = Field(default=.01, gt=0, le=1)
     risk_free_rate: float = Field(default=0, ge=-.1, le=1)
     walk_forward_folds: int = Field(default=1, ge=1, le=52)
@@ -142,6 +145,23 @@ def validate_data(bars):
         raise ValueError("A run requires one base timeframe to avoid double execution")
 
 
+def _fill_price(ref, side, config):
+    """Actual fill price: frictionless reference moved adversely by slippage + half the spread."""
+    sign = 1 if str(getattr(side, "value", side)).upper() == "BUY" else -1
+    friction = D(config.slippage_bps) / 10000 + D(config.spread_bps) / 20000
+    return D(ref) * (1 + sign * friction)
+
+
+def _fill_costs(ref, side, qty, price, config):
+    """(commission, slippage_cost, spread_cost) for a fill, all in cash. Slippage and spread are
+    attributed against the frictionless reference so gross vs net can be separated."""
+    ref, qty, price = D(ref), D(qty), D(price)
+    commission = qty * price * D(config.commission_bps) / 10000
+    slippage_cost = qty * ref * D(config.slippage_bps) / 10000
+    spread_cost = qty * ref * D(config.spread_bps) / 20000
+    return commission, slippage_cost, spread_cost
+
+
 def performance(ledger, curve, config):
     values = [row["equity"] for row in curve]
     peak, drawdown = config.initial_cash, 0.0
@@ -169,7 +189,17 @@ def performance(ledger, curve, config):
     downside = math.sqrt(mean([min(r, 0) ** 2 for r in excess])) if excess else 0
     days = (datetime.fromisoformat(curve[-1]["timestamp"]) - datetime.fromisoformat(curve[0]["timestamp"])).total_seconds() / 86400
     ratio = float(ledger.equity / ledger.initial_cash)
-    return {"return_pct": (ratio - 1) * 100, "max_drawdown_pct": drawdown * 100,
+    net_return_pct = (ratio - 1) * 100
+    commission = float(ledger.fees)
+    slippage = float(ledger.slippage_cost)
+    spread = float(ledger.spread_cost)
+    total_costs = commission + slippage + spread
+    cost_drag_pct = total_costs / config.initial_cash * 100
+    # Gross = net with the frictional costs added back (an attribution, not a re-simulation):
+    # net_equity = gross_equity - costs, so gross_return - net_return = costs / initial_cash.
+    gross_return_pct = net_return_pct + cost_drag_pct
+    return {"return_pct": net_return_pct, "net_return_pct": net_return_pct,
+            "gross_return_pct": gross_return_pct, "max_drawdown_pct": drawdown * 100,
             "max_drawdown_duration_days": dd_seconds / 86400,
             "avg_exposure_pct": mean(exposures) * 100 if exposures else None,
             "max_exposure_pct": max(exposures) * 100 if exposures else None,
@@ -177,7 +207,11 @@ def performance(ledger, curve, config):
             "volatility_annualized": vol * math.sqrt(252) if vol else None,
             "sharpe": mean(excess) / vol * math.sqrt(252) if vol else None,
             "sortino": mean(excess) / downside * math.sqrt(252) if downside else None,
-            "daily_observations": len(returns), "costs": float(ledger.fees),
+            "daily_observations": len(returns),
+            "costs": {"commission": commission, "slippage": slippage, "spread": spread,
+                      "total": total_costs, "cost_drag_pct": cost_drag_pct,
+                      "gross_edge_kept_pct": (net_return_pct / gross_return_pct * 100)
+                      if gross_return_pct not in (0, None) else None},
             "turnover": sum(f["quantity"] * f["price"] for f in ledger.fills) / config.initial_cash,
             "trades": ledger.trade_stats(), "annualization": "252 sessions; daily close returns",
             "undefined_metrics": "null for insufficient history or zero denominator; CAGR requires >=365 days"}
@@ -237,7 +271,7 @@ def run_portfolio_account(name, ordered, config):
         else StaticUniverse(config.universe or symbols)
     ledger = Portfolio(config.initial_cash)
     slip, fee_rate = D(config.slippage_bps / 10000), D(config.commission_bps / 10000)
-    buy_cost_factor = (1 + slip) * (1 + fee_rate)
+    buy_cost_factor = (1 + slip + D(config.spread_bps) / 20000) * (1 + fee_rate)
 
     batches = [(ts, list(batch)) for ts, batch in groupby(ordered, key=lambda b: b.timestamp)]
     sessions = [session_date_of(batch[0]) for _, batch in batches]
@@ -258,9 +292,9 @@ def run_portfolio_account(name, ordered, config):
 
         # ---- execute last decision at this bar's OPEN: sells first, then scaled buys ----
         def _fill(sym, side, qty, bar_open):
-            price = bar_open * (1 + slip if side == "BUY" else 1 - slip)
-            fee = D(qty) * price * fee_rate
-            ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat())
+            price = _fill_price(bar_open, side, config)
+            fee, slc, spc = _fill_costs(bar_open, side, qty, price, config)
+            ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat(), slc, spc)
             vol_left[sym] -= qty
 
         due = {s: o for s, o in pending.items() if s in open_px and ts >= o["available"]}
@@ -385,7 +419,7 @@ def run_backtest(bars, config):
                     elif side == "BUY" and day_halted:
                         rejections.append({"symbol": sym, "timestamp": ts.isoformat(), "reason": "daily_loss"})
                     else:
-                        price = bar.open * (1 + D(config.slippage_bps / 10000) * (1 if side == "BUY" else -1))
+                        price = _fill_price(bar.open, side, config)
                         held = ledger.positions.get(sym, D(0))
                         qty = min(wanted, volume_left)
                         if side == "BUY":
@@ -398,8 +432,8 @@ def run_backtest(bars, config):
                         else:
                             qty = min(qty, int(held))
                         if qty > 0:
-                            fee = D(qty) * price * D(config.commission_bps / 10000)
-                            ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat())
+                            fee, slc, spc = _fill_costs(bar.open, side, qty, price, config)
+                            ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat(), slc, spc)
                             volume_left -= qty
                             if side == "BUY" and strategy and (config.stop_loss_pct or config.take_profit_pct):
                                 cost = ledger.avg_cost[sym]
@@ -430,9 +464,10 @@ def run_backtest(bars, config):
                     if basis is not None:
                         qty = min(int(held), volume_left)
                         if qty:
-                            price = basis * (1 - D(config.slippage_bps / 10000))
-                            ledger.fill(f"{name}-{len(ledger.fills)}", sym, "SELL", qty, price,
-                                        D(qty) * price * D(config.commission_bps / 10000), available_at(bar).isoformat())
+                            price = _fill_price(basis, "SELL", config)
+                            fee, slc, spc = _fill_costs(basis, "SELL", qty, price, config)
+                            ledger.fill(f"{name}-{len(ledger.fills)}", sym, "SELL", qty, price, fee,
+                                        available_at(bar).isoformat(), slc, spc)
                             volume_left -= qty
                         if ledger.positions.get(sym, D(0)) <= 0:
                             armed_exit.pop(sym, None)
@@ -504,3 +539,32 @@ def run_backtest(bars, config):
         payload["universe_sha256"] = hashlib.sha256(Path(config.universe_csv).read_bytes()).hexdigest()
     payload["result_sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return payload
+
+
+COST_SCENARIOS = [
+    {"label": "frictionless", "slippage_bps": 0, "commission_bps": 0, "spread_bps": 0},
+    {"label": "low", "slippage_bps": 1, "commission_bps": 0.5, "spread_bps": 1},
+    {"label": "moderate", "slippage_bps": 3, "commission_bps": 1, "spread_bps": 3},
+    {"label": "high", "slippage_bps": 5, "commission_bps": 1, "spread_bps": 8},
+    {"label": "stress", "slippage_bps": 10, "commission_bps": 2, "spread_bps": 15},
+]
+
+
+def cost_sensitivity(bars, config, scenarios=None):
+    """Descriptive cost robustness: re-run the SAME strategy/data under predefined cost scenarios
+    and report net/gross return and cost drag per account. This is analysis, NOT optimization —
+    the strategy is never changed to fit the costs. Especially important for 1m/5m horizons where
+    the spread dominates and can turn a positive gross edge negative net."""
+    config = ResearchConfig.model_validate(config) if isinstance(config, dict) else config
+    scenarios = scenarios or COST_SCENARIOS
+    out = []
+    for sc in scenarios:
+        cfg = config.model_copy(update={k: sc[k] for k in ("slippage_bps", "commission_bps", "spread_bps") if k in sc})
+        result = run_backtest(bars, cfg)
+        accounts = {name: {"net_return_pct": a["metrics"]["net_return_pct"],
+                           "gross_return_pct": a["metrics"]["gross_return_pct"],
+                           "cost_drag_pct": a["metrics"]["costs"]["cost_drag_pct"],
+                           "trades": a["metrics"]["trades"]["total"]}
+                    for name, a in result["accounts"].items()}
+        out.append({"scenario": sc, "accounts": accounts})
+    return out

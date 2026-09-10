@@ -20,6 +20,8 @@ class Portfolio:
         self.entry_fees, self.realized_pnl = {}, {}
         self.total_realized = D(0)
         self.fees = D(0)
+        self.slippage_cost = D(0)
+        self.spread_cost = D(0)
         self.closed_trades, self.fills = [], []
         self.seen = set()
 
@@ -33,11 +35,13 @@ class Portfolio:
             raise ValueError("Invalid mark price")
         self.prices[symbol] = price
 
-    def fill(self, fill_id, symbol, side, quantity, price, commission=0, timestamp=None):
+    def fill(self, fill_id, symbol, side, quantity, price, commission=0, timestamp=None,
+             slippage_cost=0, spread_cost=0):
         if str(fill_id) in self.seen:
             return False
         qty, price, fee = D(quantity), D(price), D(commission)
-        if not all(x.is_finite() for x in (qty, price, fee)) or min(qty, price) <= 0 or fee < 0:
+        slip_c, spread_c = D(slippage_cost), D(spread_cost)
+        if not all(x.is_finite() for x in (qty, price, fee, slip_c, spread_c)) or min(qty, price) <= 0 or min(fee, slip_c, spread_c) < 0:
             raise ValueError("Invalid fill")
         side = str(getattr(side, "value", side)).upper()
         if side not in ("BUY", "SELL"):
@@ -63,6 +67,8 @@ class Portfolio:
         self.positions[symbol] = old + signed
         self.cash -= signed * price + fee
         self.fees += fee
+        self.slippage_cost += slip_c
+        self.spread_cost += spread_c
         self.total_realized += realized
         self.realized_pnl[symbol] = self.realized_pnl.get(symbol, D(0)) + realized
         self.mark(symbol, price)
