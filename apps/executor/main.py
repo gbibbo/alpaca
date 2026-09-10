@@ -156,6 +156,12 @@ class OrderTracker:
         self.db = sqlite3.connect(journal_path or ':memory:')
         self.db.execute('CREATE TABLE IF NOT EXISTS orders (broker_id TEXT PRIMARY KEY, intent TEXT, qty TEXT, notional TEXT, status TEXT)')
         self.db.execute('CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, payload TEXT)')
+        # Protective bracket legs (take-profit / stop) tracked as our own orders so a protective
+        # exit fill is never missed in PnL, and so they survive a restart.
+        self.db.execute('CREATE TABLE IF NOT EXISTS legs (leg_id TEXT PRIMARY KEY, parent TEXT, '
+                        'symbol TEXT, side TEXT, qty TEXT, filled TEXT, status TEXT, client_order_id TEXT)')
+        self.legs_by_id: Dict[str, Dict] = {}
+        self.legs_by_parent: Dict[str, List[str]] = {}
         # Track orders by various IDs
         self.orders_by_client_id: Dict[str, Dict] = {}
         self.orders_by_broker_id: Dict[str, Dict] = {}
@@ -178,6 +184,85 @@ class OrderTracker:
         for broker_id, payload, qty, notional, status in rows:
             self._rehydrate(broker_id, OrderIntent.model_validate_json(payload),
                             Decimal(qty), Decimal(notional), status)
+        for leg_id, parent, symbol, side, qty, filled, status, coid in self.db.execute(
+                'SELECT leg_id,parent,symbol,side,qty,filled,status,client_order_id FROM legs'):
+            self._track_leg(leg_id, parent, symbol, side, Decimal(qty), Decimal(filled or 0),
+                            status, coid, persist=False)
+
+    # ---- Protective bracket legs -------------------------------------------------
+    def _persist_leg(self, leg):
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO legs VALUES (?,?,?,?,?,?,?,?)',
+                            (leg['leg_id'], leg['parent'], leg['symbol'], leg['side'],
+                             str(leg['qty']), str(leg['filled']), leg['status'], leg['client_order_id']))
+
+    def _track_leg(self, leg_id, parent, symbol, side, qty, filled, status, client_order_id, persist=True):
+        leg = {'leg_id': str(leg_id), 'parent': str(parent), 'symbol': symbol,
+               'side': str(getattr(side, 'value', side)).lower(), 'qty': qty, 'filled': filled,
+               'status': (status or 'held').lower(), 'client_order_id': client_order_id}
+        self.legs_by_id[leg['leg_id']] = leg
+        self.legs_by_parent.setdefault(leg['parent'], [])
+        if leg['leg_id'] not in self.legs_by_parent[leg['parent']]:
+            self.legs_by_parent[leg['parent']].append(leg['leg_id'])
+        if persist:
+            self._persist_leg(leg)
+        return leg
+
+    def register_legs(self, parent_broker_id, symbol, broker_legs):
+        """Record the protective legs returned by a bracket submit so their fills are reconciled.
+        alpaca-py returns Order.legs as a list or None; ignore anything else."""
+        if not isinstance(broker_legs, (list, tuple)):
+            return
+        for bl in broker_legs:
+            qty = Decimal(str(getattr(bl, 'qty', 0) or 0))
+            self._track_leg(bl.id, parent_broker_id, symbol, getattr(bl, 'side', ''), qty,
+                            Decimal(0), order_status_str(bl), getattr(bl, 'client_order_id', None))
+
+    def active_leg_ids(self) -> List[str]:
+        return [lid for lid, leg in self.legs_by_id.items() if leg['status'] not in TERMINAL_STATUSES]
+
+    def open_leg_ids_for_symbol(self, symbol: str) -> List[str]:
+        return [lid for lid, leg in self.legs_by_id.items()
+                if leg['symbol'] == symbol and leg['status'] not in TERMINAL_STATUSES]
+
+    def update_leg(self, alpaca_leg) -> Optional[OrderFill]:
+        """Reconcile one protective leg from a broker snapshot. Returns an OrderFill for a new
+        (protective-exit) fill, else None. Cumulative filled_qty is handled as a delta."""
+        leg = self.legs_by_id.get(str(alpaca_leg.id))
+        if leg is None:
+            return None
+        leg['status'] = order_status_str(alpaca_leg)
+        filled_qty = Decimal(str(alpaca_leg.filled_qty or 0))
+        fill_price = Decimal(str(alpaca_leg.filled_avg_price)) if alpaca_leg.filled_avg_price else None
+        new_fill = filled_qty - leg['filled']
+        order_fill = None
+        if new_fill > 0 and fill_price:
+            leg['filled'] = filled_qty
+            from uuid import uuid5, NAMESPACE_URL
+            order_fill = OrderFill(
+                fill_id=uuid5(NAMESPACE_URL, f"leg:{leg['leg_id']}:{filled_qty}"),
+                symbol=leg['symbol'], timestamp=TimeUtils.utc_now(),
+                side=SignalSide.SELL if leg['side'] == 'sell' else SignalSide.BUY,
+                quantity=leg['qty'], fill_price=fill_price, fill_quantity=new_fill,
+                broker_order_id=str(leg['leg_id']),
+                client_order_id=(leg.get('client_order_id') or f"leg-{leg['leg_id'][:12]}"),
+                status=OrderStatus.FILLED if filled_qty >= leg['qty'] else OrderStatus.PARTIALLY_FILLED,
+                commission=Decimal('0.0'), total_value=new_fill * fill_price)
+            self.orders_filled += 1
+            logger.info(f"🛡️ Protective {leg['side']} leg filled: {leg['symbol']} {new_fill}@${fill_price}")
+        with self.db:
+            self.db.execute('UPDATE legs SET filled=?,status=? WHERE leg_id=?',
+                            (str(leg['filled']), leg['status'], leg['leg_id']))
+            if order_fill:
+                self.db.execute('INSERT OR IGNORE INTO outbox VALUES (?,?)',
+                                (str(order_fill.fill_id), order_fill.model_dump_json()))
+        return order_fill
+
+    def mark_leg_canceled(self, leg_id: str) -> None:
+        leg = self.legs_by_id.get(str(leg_id))
+        if leg:
+            leg['status'] = 'canceled'
+            self._persist_leg(leg)
 
     def _rehydrate(self, broker_id, order_intent, total_filled, total_notional, status):
         """Rebuild in-memory state from the journal WITHOUT writing back.
@@ -603,6 +688,20 @@ class EnhancedAlpacaExecutor:
             raise IdempotencyCheckError(
                 f"Could not verify existing order {client_order_id}: {e}") from e
 
+    async def cancel_bracket_legs(self, symbol: str) -> None:
+        """Cancel any open protective legs for a symbol so a strategic exit can use the shares
+        they reserve. The monitor confirms the terminal state from the broker afterwards."""
+        for leg_id in self.order_tracker.open_leg_ids_for_symbol(symbol):
+            try:
+                await self._execute_with_retry(
+                    operation="cancel_order",
+                    func=lambda lid=leg_id: self.trading_client.cancel_order_by_id(lid),
+                    description=f"Cancel protective leg {leg_id}")
+                logger.info(f"Canceled protective leg {leg_id} for {symbol} before strategic exit")
+            except Exception as e:
+                logger.warning(f"Could not cancel protective leg {leg_id} (may already be gone): {e}")
+            self.order_tracker.mark_leg_canceled(leg_id)
+
     def is_intent_expired(self, order_intent: OrderIntent) -> bool:
         """Intents carry a valid_until set by the risk manager; never act on stale redeliveries."""
         if not order_intent.valid_until:
@@ -762,6 +861,10 @@ class EnhancedAlpacaExecutor:
                         )
                         return None
 
+                    # A strategic exit needs the shares that the protective bracket legs reserve;
+                    # cancel those legs first so the SELL is not rejected for unreserved shares.
+                    await self.cancel_bracket_legs(order_intent.symbol)
+
                 # Epic 4: Check if order already exists by client_order_id (idempotency)
                 existing_order = await self.get_existing_order(order_intent.client_order_id)
                 if existing_order:
@@ -819,6 +922,9 @@ class EnhancedAlpacaExecutor:
                 # Add to order tracker (broker ids are UUIDs in alpaca-py; our models want str)
                 broker_id = str(order_response.id)
                 self.order_tracker.add_pending_order(order_intent, broker_id)
+                # Record the protective bracket legs so their exits are reconciled and survive restart.
+                self.order_tracker.register_legs(broker_id, order_intent.symbol,
+                                                 getattr(order_response, 'legs', None))
 
                 logger.info(f"✅ Order submitted successfully:")
                 logger.info(f"  Alpaca Order ID: {broker_id}")
@@ -926,6 +1032,24 @@ class EnhancedAlpacaExecutor:
                             await self._process_order_update(order)
                         except Exception as e:
                             logger.error(f"Error fetching order status for {broker_id}: {e}")
+
+                # Reconcile protective bracket legs so a stop/take-profit exit is never missed.
+                for leg_id in list(self.order_tracker.active_leg_ids()):
+                    try:
+                        leg_order = await self._execute_with_retry(
+                            operation="get_orders",
+                            func=lambda lid=leg_id: self.trading_client.get_order_by_id(lid),
+                            description=f"Get leg status {leg_id}")
+                        fill = self.order_tracker.update_leg(leg_order)
+                        if fill and not self.deduplication.is_fill_processed(fill):
+                            self.order_tracker.drain_outbox(self.bus)
+                            self.bus.publish_system_event(
+                                event_type="order_filled", source="executor",
+                                data={"symbol": fill.symbol, "side": fill.side.value,
+                                      "protective_exit": True, "broker_order_id": fill.broker_order_id,
+                                      "fill_price": float(fill.fill_price), "fill_quantity": float(fill.fill_quantity)})
+                    except Exception as e:
+                        logger.error(f"Error reconciling leg {leg_id}: {e}")
 
                 await asyncio.sleep(15)  # Check every 15 seconds
 
