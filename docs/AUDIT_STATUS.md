@@ -6,6 +6,18 @@ broker-execution items are deliberately deprioritized until paper/live.
 
 Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; API cleanup `94fea7d`.
 
+## Intraday research line (SPY/QQQ, no Tiingo) — spec of 2026-09-10
+- **done** — Timeframes extended to 1m/5m/15m/30m/1h/1d, session-aligned (09:30 ET), DST/early-close/day-change tested (`tests/test_intraday_timeframes.py`, Block 1, `a421640`).
+- **done** — Explicit configurable **spread cost** + gross/net/commission/slippage/spread attribution + cost-sensitivity sweep (`tests/test_cost_model.py`, Block 2, `235349e`).
+- **done** — First-class **intraday execution contract** (`run_intraday_account`): RTH only, decisions on closed bars, entry at next-open, first-class time exit (`Signal.hold_bars`), forced session-close flatten (no overnight), per-session reset (`on_session_start`), `allow_last_bar_entry` for the Gao et al. last-half-hour case (`tests/test_intraday_engine.py`, Blocks 3-4, `a1e64d3`/`ad39f60`).
+- **done** — Three preregistered long-only strategies: `extreme_reversal_1m`, `opening_range_breakout_5m`, `market_intraday_momentum_30m` (`tests/test_intraday_strategies.py`, `docs/PREREGISTRATION_INTRADAY.md`).
+- **done** — 15m demonstrated end to end (ingest→resample→backtest→execution, `tests/test_15m_end_to_end.py`, `7fb503c`).
+- **done** — Portfolio rebalance scheduling generalized (monthly/daily/every_n_bars/session_time), monthly unchanged byte-for-byte (`tests/test_portfolio_scheduling.py`, `1dd602d`).
+- **done** — Full intraday metrics block (win rate, profit factor, avg PnL/trade, gross-edge-kept, drawdown, Sharpe, exposure, turnover, holding time; `tests/test_intraday_metrics.py`).
+- **done** — Data pull (`scripts/fetch_intraday_data.py`, SIP detected not assumed, ~3y SPY/QQQ 1m) + experiment runner (`scripts/run_intraday_experiments.py`) + report generator (`scripts/report_intraday.py`) (`e508958`). Raw SIP CSVs gitignored; aggregate results committed.
+- **in progress** — Experiment run A-D on the real data and the results report (`docs/INTRADAY_RESULTS.md`).
+- **pending (external data)** — TIINGO_API_KEY entry (`scripts/set_secret.py`, `83fafd2`) for the cross-sectional S&P 500 point-in-time universe; not needed for SPY/QQQ intraday.
+
 ## Verified (not a backlog item, but the handover left it unverified)
 - **done** — Full suite green in the real environment: 183 passed / 21 skipped (WSL, real Redis+streams). The 12 Windows-only failures were environmental (no Redis reachable, empty creds, tmp perms).
 - **done** — Real uvicorn **lifespan** research flow end-to-end over HTTP: login → create job → subprocess CLI → CSV → engine → results → download, with measurable per-account metrics. `/portfolio` returns 503 in backtest mode.

@@ -176,3 +176,5 @@ data/real/
 # Raw SIP/IEX 1-minute intraday pulls (licensed market data; large; not a fixture). Only the
 # aggregate research results + data-lineage metadata are committed (docs/, data/intraday_results/).
 data/intraday/
+# latest.json is a moving pointer to the newest run; commit the immutable timestamped result instead.
+data/intraday_results/latest.json
