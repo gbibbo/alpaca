@@ -254,6 +254,46 @@ def walk_forward_report(curve, folds):
                     "in-sample selection unless the strategy was chosen before seeing this data"}
 
 
+def _rebalance_indices(batches, sessions, spec):
+    """Batch indices at which a PortfolioStrategy decides (the decision executes at the NEXT bar's
+    open, so the final batch is never a decision point). Generalises scheduling beyond the original
+    hardcoded monthly cadence; the "monthly" branch reproduces the exact month-boundary rule so
+    existing monthly strategies (e.g. XSMOM 12-1) are byte-for-byte unchanged.
+
+    Supported `rebalance` specs (case-insensitive):
+      monthly              last session before each calendar-month change (default, unchanged)
+      daily                last batch of each session (session change)
+      every_n_bars:N       every N-th batch (i.e. (i+1) % N == 0)
+      session_time:HH:MM   the batch at wall-clock HH:MM US/Eastern within a session (intraday)
+    """
+    n = len(batches)
+    if n <= 1:
+        return set()
+    spec = (spec or "monthly").strip().lower()
+
+    if spec == "monthly":
+        return {i for i in range(n - 1)
+                if (sessions[i].year, sessions[i].month) != (sessions[i + 1].year, sessions[i + 1].month)}
+    if spec == "daily":
+        return {i for i in range(n - 1) if sessions[i] != sessions[i + 1]}
+    if spec.startswith("every_n_bars:") or spec.startswith("every:"):
+        step = int(spec.split(":", 1)[1])
+        if step <= 0:
+            raise ValueError(f"every_n_bars step must be positive, got {step}")
+        return {i for i in range(n - 1) if (i + 1) % step == 0}
+    if spec.startswith("session_time:"):
+        hhmm = spec.split(":", 1)[1]
+        hh, mm = (int(x) for x in hhmm.split(":"))
+        out = set()
+        for i in range(n - 1):
+            et = batches[i][0].astimezone(NY)
+            if et.hour == hh and et.minute == mm:
+                out.add(i)
+        return out
+    raise ValueError(f"Unknown rebalance spec '{spec}'. Use monthly | daily | "
+                     f"every_n_bars:N | session_time:HH:MM")
+
+
 def run_portfolio_account(name, ordered, config):
     """Second decision path: a PortfolioStrategy decides ONCE per batch (all symbols of a
     timestamp), only on the last session of each month, from closed bars; the resulting
@@ -275,8 +315,7 @@ def run_portfolio_account(name, ordered, config):
 
     batches = [(ts, list(batch)) for ts, batch in groupby(ordered, key=lambda b: b.timestamp)]
     sessions = [session_date_of(batch[0]) for _, batch in batches]
-    decide_at = {i for i in range(len(batches) - 1)
-                 if (sessions[i].year, sessions[i].month) != (sessions[i + 1].year, sessions[i + 1].month)}
+    decide_at = _rebalance_indices(batches, sessions, getattr(strategy, "rebalance", "monthly"))
 
     history = defaultdict(list)
     pending = {}          # symbol -> {"side","quantity","available","expires"}
@@ -497,12 +536,31 @@ def run_intraday_account(name, ordered, config, strategy):
     metrics = performance(ledger, curve, config)
     holds = [t["holding_seconds"] for t in trades]
     n_sessions = len({session_date_of(b) for b in ordered})
+    ts = metrics["trades"]                      # closing-lot stats (win rate, profit factor, ...)
+    net_pnl = float(ledger.equity - ledger.initial_cash)
+    n_closed = ts.get("total") or 0
+    # Self-contained intraday report block (spec item 9): everything needed to judge a very-short
+    # strategy, including how much of the gross edge survives costs. Headline fields are pulled from
+    # `metrics` (computed by performance()) so the intraday block reads on its own.
     metrics["intraday"] = {
         "trades": len(trades), "trades_per_day": len(trades) / n_sessions if n_sessions else None,
         "sessions": n_sessions,
         "avg_holding_seconds": mean(holds) if holds else None,
         "median_holding_seconds": (sorted(holds)[len(holds) // 2]) if holds else None,
+        "avg_holding_minutes": (mean(holds) / 60) if holds else None,
         "overnight_positions": 0,   # forced-close guarantees flat at each session end
+        "win_rate_pct": ts.get("win_rate"),
+        "profit_factor": ts.get("profit_factor"),
+        "avg_pnl_per_trade": (net_pnl / n_closed) if n_closed else None,
+        "gross_return_pct": metrics["gross_return_pct"],
+        "net_return_pct": metrics["net_return_pct"],
+        "total_costs": metrics["costs"]["total"],
+        "cost_drag_pct": metrics["costs"]["cost_drag_pct"],
+        "gross_edge_kept_pct": metrics["costs"]["gross_edge_kept_pct"],
+        "max_drawdown_pct": metrics["max_drawdown_pct"],
+        "sharpe_daily": metrics["sharpe"],
+        "avg_exposure_pct": metrics["avg_exposure_pct"],
+        "turnover": metrics["turnover"],
         "pnl_per_unit_turnover": (metrics["net_return_pct"] / (metrics["turnover"] * 100))
         if metrics["turnover"] else None,
     }
