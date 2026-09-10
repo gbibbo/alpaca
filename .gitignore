@@ -173,3 +173,6 @@ out/*.js
 
 # Real market data pulled for local backtest demos (licensing; not a fixture)
 data/real/
+# Raw SIP/IEX 1-minute intraday pulls (licensed market data; large; not a fixture). Only the
+# aggregate research results + data-lineage metadata are committed (docs/, data/intraday_results/).
+data/intraday/

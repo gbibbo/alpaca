@@ -396,22 +396,27 @@ class ExtremeReversal1m(Strategy):
     def analyze(self, symbol: str, bars: List[Bar]) -> Optional[Signal]:
         if len(bars) < 2:
             return None
-        closes = [float(b.close) for b in bars]
-        dates = [_et_date(b) for b in bars]
-        # Intraday log-returns only (drop overnight gaps between sessions).
-        rets = [np.log(closes[i] / closes[i - 1])
+        # Only the last `window`+1 intraday returns matter; bound the slice so per-bar cost stays
+        # O(window), not O(history) -- required to run on years of 1m bars. `math.log` avoids the
+        # numpy per-scalar overhead. The rule (trailing-window standardised return) is unchanged.
+        import math
+        recent = bars[-(self.window + 60):]      # a little slack to absorb overnight-gap drops
+        closes = [float(b.close) for b in recent]
+        dates = [_et_date(b) for b in recent]
+        rets = [math.log(closes[i] / closes[i - 1])
                 for i in range(1, len(closes)) if dates[i] == dates[i - 1]]
         if len(rets) < self.window + 1:
             return None
         # The current return must itself be intraday (current bar not the first of its session).
         if dates[-1] != dates[-2]:
             return None
-        recent = np.asarray(rets[-(self.window + 1):], dtype=float)
-        last = recent[-1]
-        hist = recent[:-1]                       # exclude current -> trigger can't be trivially true
-        mu = float(hist.mean())
-        sd = float(hist.std(ddof=1))
-        if not np.isfinite(sd) or sd <= 0:
+        last = rets[-1]
+        hist = rets[-(self.window + 1):-1]        # exclude current -> trigger can't be trivially true
+        n = len(hist)
+        mu = sum(hist) / n
+        var = sum((x - mu) ** 2 for x in hist) / (n - 1)   # sample variance (ddof=1)
+        sd = math.sqrt(var)
+        if not (sd > 0) or not math.isfinite(sd):
             return None
         z = (last - mu) / sd
         if z <= -self.z_threshold:
