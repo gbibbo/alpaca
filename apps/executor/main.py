@@ -903,11 +903,14 @@ class EnhancedAlpacaExecutor:
                     limit = order_intent.price
                 extras = {}
                 if order_intent.side == SignalSide.BUY:
-                    if not order_intent.stop_loss or not order_intent.take_profit:
-                        raise ValueError('Buy orders require protective exits')
-                    extras = dict(order_class=OrderClass.BRACKET,
-                                  stop_loss=StopLossRequest(stop_price=float(order_intent.stop_loss)),
-                                  take_profit=TakeProfitRequest(limit_price=float(order_intent.take_profit)))
+                    if order_intent.stop_loss and order_intent.take_profit:
+                        extras = dict(order_class=OrderClass.BRACKET,
+                                      stop_loss=StopLossRequest(stop_price=float(order_intent.stop_loss)),
+                                      take_profit=TakeProfitRequest(limit_price=float(order_intent.take_profit)))
+                    elif self.settings.require_protective_exits:
+                        raise ValueError('Buy orders require protective exits '
+                                         '(set REQUIRE_PROTECTIVE_EXITS=0 for bracket-free strategies)')
+                    # else: bracket-free BUY (pure trend/momentum), submitted as a plain limit order
                 order_request = LimitOrderRequest(symbol=order_intent.symbol, qty=float(order_intent.quantity),
                     side=alpaca_side, time_in_force=TimeInForce.GTC, limit_price=float(limit.quantize(Decimal('.01'))),
                     client_order_id=order_intent.client_order_id, **extras)

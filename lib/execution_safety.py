@@ -46,9 +46,11 @@ def check_order(client, redis, settings, intent):
     previous_equity = Decimal(str(account.last_equity))
     if previous_equity <= 0 or equity <= previous_equity * (1 - Decimal(str(settings.max_daily_loss))):
         raise RuntimeError("Daily loss limit or unavailable day-start equity")
-    if not intent.price or not intent.stop_loss or not intent.take_profit:
-        raise RuntimeError("Entry requires a price and protective exits")
-    if not intent.stop_loss < intent.price < intent.take_profit:
+    if not intent.price:
+        raise RuntimeError("Entry requires a reference price")
+    if getattr(settings, "require_protective_exits", True) and (not intent.stop_loss or not intent.take_profit):
+        raise RuntimeError("Entry requires protective exits (or set require_protective_exits=False)")
+    if intent.stop_loss and intent.take_profit and not (intent.stop_loss < intent.price < intent.take_profit):
         raise RuntimeError("Invalid protective exit prices")
     pending_value = Decimal(0)
     pending_symbol = Decimal(0)

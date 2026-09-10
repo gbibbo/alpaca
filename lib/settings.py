@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     enable_live_trading: bool = False
     paper_trading: bool = True
+    # Require a protective bracket (stop + take-profit) on every BUY. Default True (safe). Set
+    # False (REQUIRE_PROTECTIVE_EXITS=0) for pure trend/momentum strategies that manage exits by
+    # signal rather than a fixed bracket; a BUY without stop/take-profit then submits plainly.
+    require_protective_exits: bool = True
     
     # Timezone Configuration (new)
     market_timezone: str = "US/Eastern"
