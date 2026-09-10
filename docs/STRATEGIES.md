@@ -148,10 +148,44 @@ Data: 12-month momentum needs 253 daily closes before its first decision, so bac
 least ~550 calendar days (`DAILY_HISTORY_DAYS`, now the default) and always use split/dividend
 **adjusted** bars (`adjustment="all"`); unadjusted data turns a stock split into a fake crash.
 
-Next architectural step (not yet implemented): **cross-sectional** momentum (rank the whole
-universe monthly, buy the top decile) has stronger academic evidence in equities but needs a
-portfolio/universe strategy contract, because the question becomes "is AAPL more attractive
-than MSFT" rather than "is AAPL attractive".
+### Portfolio (cross-sectional) strategies
+
+`Strategy` answers "is AAPL attractive?" one symbol at a time. A **`PortfolioStrategy`**
+(`lib/portfolio_strategy.py`) answers "given everything eligible today, what should the whole
+portfolio look like?" and returns a `PortfolioTarget`: symbol → target weight of equity
+(sum ≤ 1, remainder cash; long only). The `Strategy` contract is untouched.
+
+```
+PortfolioStrategy.target(as_of, histories, universe) -> PortfolioTarget
+        ↓  lib/rebalance.py: plan_rebalance (current vs target -> whole-share trades)
+   sells first, buys scaled DOWN proportionally to available cash (one atomic decision)
+        ↓  executes at the NEXT bar open
+```
+
+The backtester runs a portfolio strategy **once per batch** (all symbols of a timestamp), only
+on the **last session of each month**, from closed bars. Every target value comes from one
+equity snapshot, so results are invariant to the order symbols are listed in (tested, including
+when cash is scarce), and there is no lookahead (tested).
+
+Built-ins (`apps/strategies/portfolio_library.py`):
+
+| Name | What | Note |
+|---|---|---|
+| `xsmom_12_1_long_only` | 12-1 cross-sectional momentum: `P[t-21]/P[t-252] - 1`, rank the universe, hold the **top decile equal-weight**, monthly, long only, no brackets, gross 100% | **Preregistered** (skip 21, lookback 252, top 10%, equal weight, monthly). No absolute-momentum filter yet: that is a different (combined) strategy for a later ablation. |
+| `equal_weight_universe` | 1/N over the same eligible universe on the same dates | **Primary benchmark** for xsmom: `R_top_decile − R_equal_weight_universe` isolates the ranking from size-weighting and concentration. SPY is secondary. |
+
+Extra outputs per portfolio account: `rebalances` (holdings, gross exposure, one-way turnover
+`½ Σ|w_target − w_pretrade|`), `turnover` summary, `decile_returns` (mean **next-period** return
+by momentum decile, D10 = winners), and top-level `comparisons` (excess over the equal-weight
+universe). Ask first whether the **decile ladder** has economically sensible shape (high deciles
+beating low ones on average); "my portfolio made money" is the weaker question.
+
+**Universe is the real problem.** `ResearchConfig.universe` uses a `StaticUniverse` (fixed
+list) — it is survivorship-biased and fine for an architectural smoke test only. A serious
+experiment needs a point-in-time `Universe.members(as_of)` (who was eligible *then*), which is
+not implemented yet. Five symbols do not test the factor; hundreds do (top decile ≈ 50 names at
+≈2% each, at which point `max_position_size` stops mattering). Keep long only: momentum crashes
+come mostly from the short leg.
 
 ### TRADING_MODE
 

@@ -431,7 +431,12 @@ class EnhancedRiskManager:
 
             # BUY
             base_risk_amount = portfolio_value * Decimal(str(self.settings.risk_pct))
-            confidence_adjusted_risk = base_risk_amount / Decimal(str(self.settings.stop_loss_pct))
+            if self.settings.stop_loss_pct:
+                # Risk-per-trade sizing: risk budget / distance to the stop.
+                confidence_adjusted_risk = base_risk_amount / Decimal(str(self.settings.stop_loss_pct))
+            else:
+                # No stop configured -> "long or cash": size to the position allocation cap.
+                confidence_adjusted_risk = max_position_value
             room = max_position_value - held_value
             if room <= 0:
                 return Decimal('0'), (f"Position limit reached for {signal.symbol}: holding ${held_value:.2f} "

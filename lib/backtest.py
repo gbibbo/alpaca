@@ -45,12 +45,16 @@ class ResearchConfig(BaseModel):
     max_volume_participation: float = Field(default=.01, gt=0, le=1)
     risk_free_rate: float = Field(default=0, ge=-.1, le=1)
     walk_forward_folds: int = Field(default=1, ge=1, le=52)
+    # Portfolio strategies: eligible symbols (None -> every symbol in the dataset). A static list
+    # is survivorship-biased; use it for architectural smoke tests, not as historical evidence.
+    universe: list[str] | None = None
 
     @model_validator(mode="after")
     def unique(self):
         if len(set(self.strategies)) != len(self.strategies):
             raise ValueError("Duplicate strategies")
-        unknown = set(self.strategies) - {"cash", "buy_and_hold"}
+        from lib.portfolio_strategy import is_portfolio_strategy
+        unknown = {s for s in self.strategies if s not in ("cash", "buy_and_hold") and not is_portfolio_strategy(s)}
         if unknown:
             create_strategies(sorted(unknown))
         return self
@@ -207,6 +211,128 @@ def walk_forward_report(curve, folds):
                     "in-sample selection unless the strategy was chosen before seeing this data"}
 
 
+def run_portfolio_account(name, ordered, config):
+    """Second decision path: a PortfolioStrategy decides ONCE per batch (all symbols of a
+    timestamp), only on the last session of each month, from closed bars; the resulting
+    rebalance executes at the NEXT bar open, sells first, buys scaled proportionally to the cash
+    actually available. Everything is derived from one equity snapshot, so results do not depend
+    on the order symbols are listed in.
+    """
+    from lib.portfolio_strategy import create_portfolio_strategy, StaticUniverse
+    from lib.rebalance import plan_rebalance, one_way_turnover
+    strategy = create_portfolio_strategy(name)
+    if strategy.timeframe != ordered[0].timeframe:
+        raise ValueError(f"{name} requires {strategy.timeframe.value}; supply matching closed bars")
+    symbols = sorted({b.symbol for b in ordered})
+    universe = StaticUniverse(config.universe or symbols)
+    ledger = Portfolio(config.initial_cash)
+    slip, fee_rate = D(config.slippage_bps / 10000), D(config.commission_bps / 10000)
+    buy_cost_factor = (1 + slip) * (1 + fee_rate)
+
+    batches = [(ts, list(batch)) for ts, batch in groupby(ordered, key=lambda b: b.timestamp)]
+    sessions = [session_date_of(batch[0]) for _, batch in batches]
+    decide_at = {i for i in range(len(batches) - 1)
+                 if (sessions[i].year, sessions[i].month) != (sessions[i + 1].year, sessions[i + 1].month)}
+
+    history = defaultdict(list)
+    pending = {}          # symbol -> {"side","quantity","available","expires"}
+    curve, rebalances, rejections = [], [], []
+    decile_buckets = defaultdict(list)   # decile -> realized next-period returns
+    prior_deciles = {}                   # symbol -> (decile, price at decision)
+
+    for i, (ts, batch) in enumerate(batches):
+        for bar in batch:
+            ledger.mark(bar.symbol, bar.open)
+        open_px = {b.symbol: b.open for b in batch}
+        vol_left = {b.symbol: int(b.volume * config.max_volume_participation) for b in batch}
+
+        # ---- execute last decision at this bar's OPEN: sells first, then scaled buys ----
+        def _fill(sym, side, qty, bar_open):
+            price = bar_open * (1 + slip if side == "BUY" else 1 - slip)
+            fee = D(qty) * price * fee_rate
+            ledger.fill(f"{name}-{len(ledger.fills)}", sym, side, qty, price, fee, ts.isoformat())
+            vol_left[sym] -= qty
+
+        due = {s: o for s, o in pending.items() if s in open_px and ts >= o["available"]}
+        for s, o in list(due.items()):
+            if ts > o["expires"]:
+                rejections.append({"symbol": s, "timestamp": ts.isoformat(), "reason": "expired"})
+                pending.pop(s); due.pop(s)
+        for s in sorted(k for k, o in due.items() if o["side"] == "SELL"):
+            held = int(ledger.positions.get(s, D(0)))
+            qty = min(due[s]["quantity"], held, vol_left[s])
+            if qty > 0:
+                _fill(s, "SELL", qty, open_px[s])
+            remaining = due[s]["quantity"] - qty
+            if remaining > 0 and held - qty > 0:
+                pending[s] = {**due[s], "quantity": remaining}
+            else:
+                pending.pop(s, None)
+        buys = {s: min(o["quantity"], vol_left[s]) for s, o in due.items() if o["side"] == "BUY"}
+        need = sum((D(q) * open_px[s] * buy_cost_factor for s, q in buys.items()), D(0))
+        ratio = (max(D(0), ledger.cash) / need) if need > ledger.cash and need > 0 else D(1)
+        for s in sorted(buys):
+            qty = int((D(buys[s]) * ratio).to_integral_value(rounding="ROUND_DOWN"))
+            if qty > 0:
+                _fill(s, "BUY", qty, open_px[s])
+            remaining = due[s]["quantity"] - qty
+            if remaining > 0 and ratio == 1 and vol_left[s] <= 0:
+                pending[s] = {**due[s], "quantity": remaining}   # only volume-capped remainder carries
+            else:
+                pending.pop(s, None)
+
+        for bar in batch:
+            ledger.mark(bar.symbol, bar.close)
+            history[bar.symbol].append(bar)
+            if len(history[bar.symbol]) > strategy.max_history:
+                history[bar.symbol] = history[bar.symbol][-strategy.max_history:]
+
+        # ---- decide (last session of the month) from CLOSED bars; executes next open ----
+        members = set(universe.members(ts)) if i in decide_at else set()
+        eligible = sorted(s for s in symbols if s in members and len(history[s]) >= strategy.lookback_bars)
+        # A month-end with nothing eligible (still in warmup) is not a decision: no plan, no record.
+        if i in decide_at and eligible:
+            at = available_at(batch[0])
+            close_px = {s: history[s][-1].close for s in eligible}
+            # Realize the previous decision's decile returns (diagnostic, ex post).
+            for s, (dec, p0) in list(prior_deciles.items()):
+                if s in close_px and p0 > 0:
+                    decile_buckets[dec].append(float(close_px[s] / p0 - 1))
+            prior_deciles = {}
+            target = strategy.target(ts, {s: history[s] for s in eligible}, eligible)
+            scores = target.metadata.get("scores") or {}
+            if scores:
+                ranked = sorted(scores, key=lambda s: (-scores[s], s))
+                n = len(ranked)
+                for r, s in enumerate(ranked):
+                    dec = 10 - min(9, (r * 10) // n)          # D10 = winners ... D1 = losers
+                    prior_deciles[s] = (dec, close_px[s])
+            plan = plan_rebalance(ledger.equity, ledger.cash, close_px, ledger.positions,
+                                  target.weights, buy_cost_factor)
+            for t in plan.trades:
+                pending[t.symbol] = {"side": t.side, "quantity": t.quantity, "available": at,
+                                     "expires": at + timedelta(seconds=4 * 86400)}
+            rebalances.append({"timestamp": at.isoformat(), "n_eligible": len(eligible),
+                               "n_holdings": len(target.weights), "gross_exposure": float(target.gross_exposure),
+                               "turnover_one_way": float(plan.turnover_one_way), "scaled_buys": plan.scaled_buys,
+                               "holdings": {s: float(w) for s, w in sorted(target.weights.items())}})
+        curve.append(ledger.snapshot(max(available_at(b) for b in batch).isoformat()))
+
+    turnovers = [r["turnover_one_way"] for r in rebalances]
+    return {"metrics": performance(ledger, curve, config), "equity_curve": curve,
+            "fills": ledger.fills, "rejections": rejections, "rebalances": rebalances,
+            "turnover": {"rebalances": len(turnovers),
+                         "mean_one_way": mean(turnovers) if turnovers else None,
+                         "total_one_way": sum(turnovers) if turnovers else 0.0},
+            "decile_returns": {f"D{d}": {"mean_next_period_return_pct": mean(v) * 100, "n": len(v)}
+                               for d, v in sorted(decile_buckets.items()) if v},
+            "final_portfolio": ledger.snapshot(curve[-1]["timestamp"]),
+            "warmup_bars": strategy.lookback_bars,
+            "first_fill_timestamp": ledger.fills[0]["timestamp"] if ledger.fills else None,
+            "walk_forward": walk_forward_report(curve, config.walk_forward_folds),
+            "unfilled_at_end": len(pending), "kind": "portfolio"}
+
+
 def run_backtest(bars, config):
     config = ResearchConfig.model_validate(config) if isinstance(config, dict) else config
     validate_data(bars)
@@ -214,7 +340,11 @@ def run_backtest(bars, config):
     data_hash = hashlib.sha256(json.dumps([b.model_dump(mode="json") for b in ordered], sort_keys=True).encode()).hexdigest()
     names = list(dict.fromkeys(config.strategies + ["cash", "buy_and_hold"]))
     accounts = {}
+    from lib.portfolio_strategy import is_portfolio_strategy
     for name in names:
+        if is_portfolio_strategy(name):
+            accounts[name] = run_portfolio_account(name, ordered, config)
+            continue
         strategy = create_strategies([name])[0] if name not in ("cash", "buy_and_hold") else None
         if strategy:
             strategy.set_seed(config.seed)
@@ -353,5 +483,11 @@ def run_backtest(bars, config):
                                "Optional walk_forward_folds reports per-sub-period consistency, but strategies take "
                                "no fitting step and selection is still in-sample unless chosen before seeing this data",
                                "OHLC cannot establish intrabar execution sequence; results are hypothetical"]}
+    # Excess of each portfolio strategy over the equal-weight universe benchmark (same stocks,
+    # same dates): isolates the value of the ranking from size-weighting and concentration.
+    if "equal_weight_universe" in accounts:
+        ew = accounts["equal_weight_universe"]["metrics"]["return_pct"]
+        payload["comparisons"] = {n: {"excess_return_pct_over_equal_weight_universe": a["metrics"]["return_pct"] - ew}
+                                  for n, a in accounts.items() if a.get("kind") == "portfolio" and n != "equal_weight_universe"}
     payload["result_sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return payload

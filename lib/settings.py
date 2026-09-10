@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     max_daily_loss: float = 0.05  # 5%
     max_portfolio_risk: float = 0.20  # 20%
     max_position_size: float = 0.10  # 10%
-    stop_loss_pct: float = 0.02  # 2%
-    take_profit_pct: float = 0.06  # 6%
+    stop_loss_pct: Optional[float] = 0.02  # 2%
+    take_profit_pct: Optional[float] = 0.06  # 6%
     risk_pct: float = 0.02  # Risk per trade
     
     # Enhanced Rate Limiting (using monotonic time)
@@ -97,6 +97,8 @@ class Settings(BaseSettings):
         }
         for field, (low, high) in bounds.items():
             value = getattr(self, field)
+            if value is None and field in ("stop_loss_pct", "take_profit_pct"):
+                continue  # explicitly disabled
             if not math.isfinite(value) or not (low < value <= high):
                 raise ValueError(
                     f"Invalid risk setting {field}={value}; must be finite and in ({low}, {high}]")
