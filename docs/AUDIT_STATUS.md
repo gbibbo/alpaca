@@ -19,7 +19,7 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 - **pending** — Submission lock expiry/multi-executor/ambiguous-broker-response tests.
 - **done** — `get_existing_order` is now fail-closed: it returns None only on a definitive 404, and raises `IdempotencyCheckError` on any ambiguous failure (network/timeout/5xx after retry) so the intent is left pending instead of risking a duplicate submit. Tested (`tests/test_executor_durability.py`). **Pending**: reconcile a terminal existing order's fills before ACK (currently returns None when it exists-but-unfilled).
 - **pending** — Require Streams/real Redis for durable operation (Pub/Sub still selectable).
-- **pending** — Validate sizing/collar ranges in Settings, not only ResearchConfig.
+- **done** — Settings validates risk parameters fail-fast at construction (finite, in range) so a misconfigured `.env` cannot reach the live risk manager/executor. Tested (`tests/test_settings_validation.py`).
 
 ## P1 — economic correctness of the historical engine
 - **done** — Resting stop persists across volume-capped bars (completes at later bar opens) instead of vanishing or being re-tested (`77338f0`).

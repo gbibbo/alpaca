@@ -9,6 +9,7 @@ Enhanced with timezone support
 from pydantic_settings import BaseSettings
 from typing import List, Optional, Literal
 from pydantic import Field
+import math
 import pytz
 
 class Settings(BaseSettings):
@@ -82,6 +83,25 @@ class Settings(BaseSettings):
             pytz.timezone(self.system_timezone)
         except pytz.exceptions.UnknownTimeZoneError as e:
             raise ValueError(f"Invalid timezone configuration: {e}")
+
+        # Validate risk parameters fail-fast at construction, so a misconfigured .env cannot
+        # reach the live risk manager / executor with nonsensical (negative, >100%, NaN) limits.
+        # (lower_exclusive, upper_inclusive)
+        bounds = {
+            "max_daily_loss": (0.0, 1.0),
+            "max_portfolio_risk": (0.0, 1.0),
+            "max_position_size": (0.0, 1.0),
+            "stop_loss_pct": (0.0, 1.0),
+            "take_profit_pct": (0.0, 10.0),
+            "risk_pct": (0.0, 1.0),
+        }
+        for field, (low, high) in bounds.items():
+            value = getattr(self, field)
+            if not math.isfinite(value) or not (low < value <= high):
+                raise ValueError(
+                    f"Invalid risk setting {field}={value}; must be finite and in ({low}, {high}]")
+        if self.max_orders_per_minute < 1:
+            raise ValueError(f"max_orders_per_minute must be >= 1, got {self.max_orders_per_minute}")
     
     @property
     def symbols_list(self) -> List[str]:
