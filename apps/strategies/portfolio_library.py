@@ -5,6 +5,8 @@ Portfolio (cross-sectional) strategies: joint decisions over a universe, returni
 
     xsmom_12_1_long_only   PREREGISTERED 12-1 cross-sectional momentum, top decile, equal weight,
                            monthly rebalance, long only, no brackets, gross exposure 100%.
+    xsmom_12_1_abs_filter   xsmom top decile with a positive absolute-momentum filter (else cash):
+                           cross-sectional + time-series momentum combined.
     equal_weight_universe  1/N over the same eligible universe on the same dates: the PRIMARY
                            benchmark for xsmom (isolates the value of the ranking from
                            size-weighting and concentration effects).
@@ -82,3 +84,31 @@ class EqualWeightUniverse(PortfolioStrategy):
         w = Decimal(1) / Decimal(len(eligible))
         return PortfolioTarget(timestamp=as_of, strategy=self.name, weights={s: w for s in eligible},
                                metadata={"n_eligible": len(eligible)})
+
+
+@register_portfolio
+class CrossSectionalMomentum12_1AbsFilter(CrossSectionalMomentum12_1):
+    """xsmom 12-1 top decile PLUS an absolute-momentum filter (cross-sectional + time-series):
+    a top-decile winner is held only if its own 12-1 momentum is also positive; otherwise that
+    slice goes to cash. Each held name keeps weight 1/k of the ORIGINAL decile size, so gross
+    exposure = (names passing) / k and the remainder is cash. In a broad drawdown, when even the
+    relative winners have negative absolute momentum, the book de-risks toward cash instead of
+    buying "the ones that fell least". This is the natural ablation of xsmom_12_1_long_only;
+    momentum crashes are tied to buying beaten-down names, so the filter targets exactly that.
+    """
+    name = "xsmom_12_1_abs_filter"
+    description = "xsmom 12-1 top decile with a positive absolute-momentum filter (else cash)"
+
+    def target(self, as_of, histories, universe):
+        base = super().target(as_of, histories, universe)
+        scores = base.metadata.get("scores") or {}
+        k = base.metadata.get("k") or 0
+        held = [s for s in base.weights if scores.get(s, 0.0) > 0.0]
+        weights = {}
+        if k > 0 and held:
+            w = Decimal(1) / Decimal(k)          # keep decile sizing; dropped slices become cash
+            weights = {s: w for s in held}
+        return PortfolioTarget(
+            timestamp=as_of, strategy=self.name, weights=weights,
+            metadata={**base.metadata, "abs_filtered": True, "held": held,
+                      "n_passing_abs": len(held), "gross_exposure": float(len(held) / k) if k else 0.0})

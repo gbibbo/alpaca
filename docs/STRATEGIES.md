@@ -172,6 +172,7 @@ Built-ins (`apps/strategies/portfolio_library.py`):
 | Name | What | Note |
 |---|---|---|
 | `xsmom_12_1_long_only` | 12-1 cross-sectional momentum: `P[t-21]/P[t-252] - 1`, rank the universe, hold the **top decile equal-weight**, monthly, long only, no brackets, gross 100% | **Preregistered** (skip 21, lookback 252, top 10%, equal weight, monthly). No absolute-momentum filter yet: that is a different (combined) strategy for a later ablation. |
+| `xsmom_12_1_abs_filter` | xsmom top decile **and** a positive absolute-momentum filter; failing slices go to cash | Cross-sectional + time-series combined. De-risks in a broad drawdown (when even relative winners have negative 12-1 momentum). The natural ablation of the pure strategy. |
 | `equal_weight_universe` | 1/N over the same eligible universe on the same dates | **Primary benchmark** for xsmom: `R_top_decile − R_equal_weight_universe` isolates the ranking from size-weighting and concentration. SPY is secondary. |
 
 Extra outputs per portfolio account: `rebalances` (holdings, gross exposure, one-way turnover
