@@ -3,14 +3,19 @@
 scripts/run_intraday_experiments.py
 Run the preregistered intraday experiments (spec item 11) on real SPY/QQQ 1-minute data pulled by
 scripts/fetch_intraday_data.py. Resolutions are never mixed: the single 1m SIP source is RTH-
-filtered and resampled session-aligned to each strategy's own timeframe, then run through the
-research engine. For every (strategy, symbol) we record gross AND net metrics, the full intraday
-block, robustness across contiguous time sub-windows, and a descriptive cost-sensitivity sweep.
+filtered, cleaned to COMPLETE sessions (partial first/last sessions discarded via the market
+calendar, not inferred from the last available bar), reduced to the sessions that are complete for
+BOTH symbols, and resampled session-aligned to each strategy's own timeframe. For every
+(strategy, symbol) we record gross AND net metrics, the full intraday block, robustness across
+contiguous time sub-windows, and a descriptive cost-sensitivity sweep.
 
-    Batch A  extreme_reversal_1m            1m   SPY, QQQ
-    Batch B  opening_range_breakout_5m      5m   SPY, QQQ
-    Batch C  market_intraday_momentum_30m   30m  SPY, QQQ
-    Batch D  smart_technical (1m), intraday_momentum_5m (5m), hourly_trend (1h)  SPY, QQQ
+    Batch A  extreme_reversal_1m                     1m   SPY, QQQ
+    Batch B  opening_range_breakout_5m               5m   SPY, QQQ
+    Batch C  market_intraday_momentum_30m            30m  SPY, QQQ   (long-only)
+    Batch C  market_intraday_momentum_30m_long_short 30m  SPY, QQQ   (faithful Gao long/short)
+    Batch D  smart_technical (1m, FULL window), intraday_momentum_5m (5m),
+             intraday_momentum_15m (15m, EXPLORATORY), hourly_trend (1h),
+             hourly_trend_intraday (1h, no-overnight ablation)         SPY, QQQ
 
 Aggregate results (no raw bars) are written to data/intraday_results/ for committing; the raw SIP
 CSVs stay gitignored under data/intraday/.
@@ -31,18 +36,20 @@ from lib.models import Bar, TimeFrame
 from lib.timeframes import in_regular_session, parse_timeframe
 from lib.resampler import BarResampler
 from lib.backtest import run_backtest, ResearchConfig, cost_sensitivity, COST_SCENARIOS
+from lib.session_filter import classify_sessions, session_date
 
-# (batch, strategy, timeframe, opts). opts.max_bars caps the (resampled) series to its most recent
-# N bars -- used only for smart_technical, whose O(max_history^2) MACD makes a 3-year 1m pass ~40
-# min; it is an existing baseline, not a research hypothesis, so a documented recent window is fine.
-# opts.subwindows toggles the 3-way time-robustness split.
+# (batch, strategy, timeframe, opts). opts.subwindows toggles the 3-way time-robustness split.
+# No strategy is capped any more: smart_technical runs the FULL window (its MACD is now O(len)).
 EXPERIMENTS = [
-    ("A", "extreme_reversal_1m", "1m", {"max_bars": None, "subwindows": True}),
-    ("B", "opening_range_breakout_5m", "5m", {"max_bars": None, "subwindows": True}),
-    ("C", "market_intraday_momentum_30m", "30m", {"max_bars": None, "subwindows": True}),
-    ("D", "smart_technical", "1m", {"max_bars": 6000, "subwindows": False}),
-    ("D", "intraday_momentum_5m", "5m", {"max_bars": None, "subwindows": True}),
-    ("D", "hourly_trend", "1h", {"max_bars": None, "subwindows": True}),
+    ("A", "extreme_reversal_1m", "1m", {"subwindows": True}),
+    ("B", "opening_range_breakout_5m", "5m", {"subwindows": True}),
+    ("C", "market_intraday_momentum_30m", "30m", {"subwindows": True}),
+    ("C", "market_intraday_momentum_30m_long_short", "30m", {"subwindows": True}),
+    ("D", "smart_technical", "1m", {"subwindows": True}),
+    ("D", "intraday_momentum_5m", "5m", {"subwindows": True}),
+    ("D", "intraday_momentum_15m", "15m", {"subwindows": True}),
+    ("D", "hourly_trend", "1h", {"subwindows": True}),
+    ("D", "hourly_trend_intraday", "1h", {"subwindows": True}),
 ]
 SYMBOLS = ["SPY", "QQQ"]
 
@@ -103,6 +110,8 @@ def _headline(acc):
     }
     if intr:
         block["intraday"] = intr
+    if "session_audit" in acc:
+        block["session_audit"] = acc["session_audit"]
     return block
 
 
@@ -128,17 +137,12 @@ def run_one(strategy, tf_str, bars_1m, opts=None):
     bars = to_timeframe(bars_1m, tf)
     if not bars:
         return {"error": "no bars after resample", "timeframe": tf_str}
-    window_note = None
-    max_bars = opts.get("max_bars")
-    if max_bars and len(bars) > max_bars:
-        bars = bars[-max_bars:]        # most-recent window (documented; only for the slow baseline)
-        window_note = f"capped to the most recent {max_bars} {tf_str} bars (baseline cost limit)"
     cfg = _cfg(strategy, BASE_COMMISSION_BPS, BASE_SLIPPAGE_BPS, BASE_SPREAD_BPS)
     res = run_backtest(bars, cfg)
     acc = res["accounts"][strategy]
     out = {"timeframe": tf_str, "n_bars": len(bars),
            "data_start": bars[0].timestamp.isoformat(), "data_end": bars[-1].timestamp.isoformat(),
-           "window_note": window_note, "headline": _headline(acc)}
+           "headline": _headline(acc)}
 
     # Robustness across contiguous time sub-windows (item 12: not driven by 1-2 days/windows).
     subs = []
@@ -159,6 +163,40 @@ def run_one(strategy, tf_str, bars_1m, opts=None):
     return out
 
 
+def clean_to_common_sessions(sources):
+    """Given {symbol: [1m RTH bars]}, discard partial sessions per symbol (calendar-derived close)
+    and keep only the sessions COMPLETE for EVERY symbol, so all strategies and both symbols run on
+    exactly the same sessions. Returns (filtered_sources, accounting)."""
+    per_symbol_complete = {}
+    audits = {}
+    for sym, bars in sources.items():
+        audit = classify_sessions(bars, TimeFrame.MINUTE)
+        audits[sym] = audit
+        per_symbol_complete[sym] = {d for (s, d) in audit["complete_keys"]}
+    common = set.intersection(*per_symbol_complete.values()) if per_symbol_complete else set()
+
+    filtered = {sym: [b for b in bars if session_date(b) in common] for sym, bars in sources.items()}
+    accounting = {
+        "timeframe_of_completeness": "1Min",
+        "close_source": "market_calendar (lib.market_calendar.session_bounds); never inferred from "
+                        "the last available bar",
+        "common_complete_sessions": len(common),
+        "common_session_first": min(common).isoformat() if common else None,
+        "common_session_last": max(common).isoformat() if common else None,
+        "per_symbol": {},
+    }
+    for sym in sources:
+        t = audits[sym]["totals"]
+        disc = audits[sym]["per_symbol"].get(sym, {}).get("discarded", [])
+        complete_dates = per_symbol_complete[sym]
+        accounting["per_symbol"][sym] = {
+            "sessions_total": t["total"], "complete": t["complete"], "incomplete": t["incomplete"],
+            "discarded_incomplete": [list(x) for x in disc],
+            "complete_but_not_common": sorted(d.isoformat() for d in (complete_dates - common)),
+        }
+    return filtered, accounting
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/intraday")
@@ -173,21 +211,30 @@ def main():
     manifest = json.loads((data_dir / "fetch_manifest.json").read_text()) \
         if (data_dir / "fetch_manifest.json").exists() else {}
 
-    # Load + RTH-filter each symbol's 1m source once; reuse across batches.
-    sources = {}
+    # Load + RTH-filter each symbol's 1m source once.
+    raw = {}
     for sym in SYMBOLS:
         csv_path = data_dir / f"{sym}_1m_{args.feed}.csv"
         if not csv_path.exists():
             print(f"!! missing {csv_path}; run fetch_intraday_data.py first")
             continue
         bars = load_rth_1m(csv_path, sym)
-        sources[sym] = bars
+        raw[sym] = bars
         print(f"{sym}: {len(bars)} RTH 1m bars {bars[0].timestamp.date()}..{bars[-1].timestamp.date()}")
+
+    # Clean to COMPLETE sessions common to every symbol (spec block 1 + 6).
+    sources, accounting = clean_to_common_sessions(raw)
+    print(f"common complete sessions: {accounting['common_complete_sessions']} "
+          f"({accounting['common_session_first']}..{accounting['common_session_last']})")
+    for sym, a in accounting["per_symbol"].items():
+        print(f"  {sym}: total={a['sessions_total']} complete={a['complete']} "
+              f"incomplete={a['incomplete']} not_common={len(a['complete_but_not_common'])}")
 
     results = {"generated_at": datetime.utcnow().isoformat() + "Z",
                "data_lineage": {"provider": "alpaca", "feed": args.feed,
                                 "resolution_source": "1Min", "rth_only": True,
                                 "fetch_manifest": manifest.get("fetches", [])},
+               "session_accounting": accounting,
                "costs_headline": {"commission_bps": BASE_COMMISSION_BPS,
                                   "slippage_bps": BASE_SLIPPAGE_BPS, "spread_bps": BASE_SPREAD_BPS},
                "batches": {}}

@@ -15,7 +15,30 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 - **done** — Portfolio rebalance scheduling generalized (monthly/daily/every_n_bars/session_time), monthly unchanged byte-for-byte (`tests/test_portfolio_scheduling.py`, `1dd602d`).
 - **done** — Full intraday metrics block (win rate, profit factor, avg PnL/trade, gross-edge-kept, drawdown, Sharpe, exposure, turnover, holding time; `tests/test_intraday_metrics.py`).
 - **done** — Data pull (`scripts/fetch_intraday_data.py`, SIP detected not assumed, ~3y SPY/QQQ 1m) + experiment runner (`scripts/run_intraday_experiments.py`) + report generator (`scripts/report_intraday.py`) (`e508958`). Raw SIP CSVs gitignored; aggregate results committed.
-- **in progress** — Experiment run A-D on the real data and the results report (`docs/INTRADAY_RESULTS.md`).
+- **done** — Experiment run A-D on the real data and the results report (`docs/INTRADAY_RESULTS.md`).
+- **done (methodological corrections, 2026-09-10)**:
+  - **Session completeness (block 1)** — a session's close is derived from the market calendar
+    (`lib/session_filter.py`), never inferred from the last available bar; partial first/last
+    sessions are discarded, early closes handled, internal gaps detected, complete/incomplete/
+    discarded counts recorded. SPY and QQQ are reduced to the sessions complete for both (751 of
+    753). The intraday engine filters to complete sessions and forces the session-close flatten on
+    the calendar close bar (`tests/test_session_completeness.py`). All intraday results regenerated.
+  - **Faithful Gao replication (block 2)** — first-class SHORT support in the research engine
+    (`allow_short`, symmetric costs); `market_intraday_momentum_30m_long_short` trades the sign
+    (long/short) with the same signal; long-only variant retained unchanged
+    (`tests/test_gao_long_short.py`).
+  - **Hourly overnight ablation (block 3)** — `hourly_trend_intraday`: same signal/parameters under
+    the intraday no-overnight contract (engine `signal_driven_exit`), to isolate overnight exposure
+    (`tests/test_hourly_intraday_ablation.py`).
+  - **smart_technical full window (block 4)** — MACD reimplemented O(history²)→O(history), proven
+    bit-for-bit identical (`tests/test_smart_technical_equiv.py`); the recent-window cap is removed
+    and it runs the same ~3-year sample.
+  - **15m exploratory (block 5)** — `intraday_momentum_15m`, a documented temporal translation of
+    `intraday_momentum_5m` (not tuned, not claimed as validation; `tests/test_intraday_15m_exploratory.py`).
+  - **Clean rerun + comparisons (blocks 6-7)** — runner cleans to common complete sessions and runs
+    A, B, C long-only, C long-short, and all baselines/ablations on identical sessions; the report
+    adds session accounting and the hourly-overnight-vs-intraday and Gao long-only-vs-long-short
+    comparisons.
 - **pending (external data)** — TIINGO_API_KEY entry (`scripts/set_secret.py`, `83fafd2`) for the cross-sectional S&P 500 point-in-time universe; not needed for SPY/QQQ intraday.
 
 ## Verified (not a backlog item, but the handover left it unverified)

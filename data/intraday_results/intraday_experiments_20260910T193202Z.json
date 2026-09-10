@@ -1,0 +1,4027 @@
+{
+  "generated_at": "2026-09-10T18:46:43.144191Z",
+  "data_lineage": {
+    "provider": "alpaca",
+    "feed": "sip",
+    "resolution_source": "1Min",
+    "rth_only": true,
+    "fetch_manifest": [
+      {
+        "provider": "alpaca",
+        "feed": "sip",
+        "symbol": "SPY",
+        "resolution": "1Min",
+        "adjustment": "all",
+        "requested_start": "2023-09-11T17:25:17.728280+00:00",
+        "requested_end": "2026-09-10T17:05:17.728280+00:00",
+        "rows": 627185,
+        "actual_start": "2023-09-11T17:26:00+00:00",
+        "actual_end": "2026-09-10T17:05:00+00:00",
+        "fetched_at": "2026-09-10T17:25:57.754729+00:00",
+        "csv": "SPY_1m_sip.csv"
+      },
+      {
+        "provider": "alpaca",
+        "feed": "sip",
+        "symbol": "QQQ",
+        "resolution": "1Min",
+        "adjustment": "all",
+        "requested_start": "2023-09-11T17:25:17.728280+00:00",
+        "requested_end": "2026-09-10T17:05:17.728280+00:00",
+        "rows": 657355,
+        "actual_start": "2023-09-11T17:26:00+00:00",
+        "actual_end": "2026-09-10T17:05:00+00:00",
+        "fetched_at": "2026-09-10T17:26:34.152357+00:00",
+        "csv": "QQQ_1m_sip.csv"
+      }
+    ]
+  },
+  "session_accounting": {
+    "timeframe_of_completeness": "1Min",
+    "close_source": "market_calendar (lib.market_calendar.session_bounds); never inferred from the last available bar",
+    "common_complete_sessions": 751,
+    "common_session_first": "2023-09-12",
+    "common_session_last": "2026-09-09",
+    "per_symbol": {
+      "SPY": {
+        "sessions_total": 753,
+        "complete": 751,
+        "incomplete": 2,
+        "discarded_incomplete": [
+          [
+            "2023-09-11",
+            "partial_start"
+          ],
+          [
+            "2026-09-10",
+            "partial_end"
+          ]
+        ],
+        "complete_but_not_common": []
+      },
+      "QQQ": {
+        "sessions_total": 753,
+        "complete": 751,
+        "incomplete": 2,
+        "discarded_incomplete": [
+          [
+            "2023-09-11",
+            "partial_start"
+          ],
+          [
+            "2026-09-10",
+            "partial_end"
+          ]
+        ],
+        "complete_but_not_common": []
+      }
+    }
+  },
+  "costs_headline": {
+    "commission_bps": 0.0,
+    "slippage_bps": 0.5,
+    "spread_bps": 1.0
+  },
+  "batches": {
+    "A:extreme_reversal_1m:SPY": {
+      "timeframe": "1m",
+      "n_bars": 291630,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:59:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.5192103000000019,
+        "net_return_pct": -2.7306931626099984,
+        "total_costs": 3249.90346261,
+        "cost_drag_pct": 3.2499034626100003,
+        "gross_edge_kept_pct": -525.9320091704631,
+        "max_drawdown_pct": 2.7430570322080405,
+        "sharpe_daily": -2.2947907557488807,
+        "avg_exposure_pct": 0.2807335543681358,
+        "turnover": 324.9903457417897,
+        "win_rate_pct": 44.94712103407756,
+        "profit_factor": 0.6841384247852151,
+        "n_closed_trades": 1702,
+        "intraday": {
+          "trades": 1702,
+          "trades_per_day": 2.266311584553928,
+          "sessions": 751,
+          "avg_holding_seconds": 298.83666274970625,
+          "median_holding_seconds": 300.0,
+          "avg_holding_minutes": 4.980611045828438,
+          "overnight_positions": 0,
+          "win_rate_pct": 44.94712103407756,
+          "profit_factor": 0.6841384247852151,
+          "avg_pnl_per_trade": -1.604402563225617,
+          "gross_return_pct": 0.5192103000000019,
+          "net_return_pct": -2.7306931626099984,
+          "total_costs": 3249.90346261,
+          "cost_drag_pct": 3.2499034626100003,
+          "gross_edge_kept_pct": -525.9320091704631,
+          "max_drawdown_pct": 2.7430570322080405,
+          "sharpe_daily": -2.2947907557488807,
+          "avg_exposure_pct": 0.2807335543681358,
+          "turnover": 324.9903457417897,
+          "pnl_per_unit_turnover": -8.402382404244033e-05,
+          "long_trades": 1702,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "1m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "SPY": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:59:00+00:00",
+          "net_return_pct": -1.147450311999998,
+          "gross_return_pct": -0.06313999999999775,
+          "sharpe_daily": -4.792959206585981,
+          "trades": 558
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:59:00+00:00",
+          "net_return_pct": -0.8322219500000005,
+          "gross_return_pct": 0.27553999999999945,
+          "sharpe_daily": -1.3843233413229838,
+          "trades": 575
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:59:00+00:00",
+          "net_return_pct": -0.7739593666099998,
+          "gross_return_pct": 0.31027030000000044,
+          "sharpe_daily": -2.7138927767178727,
+          "trades": 564
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": 0.5337589999999892,
+              "gross_return_pct": 0.5337589999999892,
+              "cost_drag_pct": 0.0,
+              "trades": 1702
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 77.00312,
+              "gross_return_pct": 77.00312,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -5.871624322135027,
+              "gross_return_pct": 0.5259960000000028,
+              "cost_drag_pct": 6.39762032213503,
+              "trades": 1702
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.98314729905181,
+              "gross_return_pct": 77.00312000000001,
+              "cost_drag_pct": 0.0199727009482,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -16.092176290116612,
+              "gross_return_pct": 0.45751970000000597,
+              "cost_drag_pct": 16.549695990116618,
+              "trades": 1702
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.94819263831081,
+              "gross_return_pct": 77.00312000000001,
+              "cost_drag_pct": 0.054927361689200004,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -27.58505099435621,
+              "gross_return_pct": 0.4260421000000001,
+              "cost_drag_pct": 28.01109309435621,
+              "trades": 1702
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.9032512526216,
+              "gross_return_pct": 77.00312,
+              "cost_drag_pct": 0.0998687473784,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -46.62752961255177,
+              "gross_return_pct": 0.32693780000000316,
+              "cost_drag_pct": 46.95446741255177,
+              "trades": 1702
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.4772880062345,
+              "gross_return_pct": 76.67121,
+              "cost_drag_pct": 0.19392199376549998,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "extreme_reversal_1m",
+      "batch": "A"
+    },
+    "A:extreme_reversal_1m:QQQ": {
+      "timeframe": "1m",
+      "n_bars": 291630,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:59:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.8739772000000054,
+        "net_return_pct": -2.6118148658199947,
+        "total_costs": 3485.79206582,
+        "cost_drag_pct": 3.48579206582,
+        "gross_edge_kept_pct": -298.8424487297813,
+        "max_drawdown_pct": 2.673102337773925,
+        "sharpe_daily": -1.6541556273798337,
+        "avg_exposure_pct": 0.30330824730011335,
+        "turnover": 348.5792057080228,
+        "win_rate_pct": 46.98795180722892,
+        "profit_factor": 0.7886876950799798,
+        "n_closed_trades": 1826,
+        "intraday": {
+          "trades": 1826,
+          "trades_per_day": 2.4314247669773636,
+          "sessions": 751,
+          "avg_holding_seconds": 299.47426067908,
+          "median_holding_seconds": 300.0,
+          "avg_holding_minutes": 4.9912376779846666,
+          "overnight_positions": 0,
+          "win_rate_pct": 46.98795180722892,
+          "profit_factor": 0.7886876950799798,
+          "avg_pnl_per_trade": -1.4303476811719604,
+          "gross_return_pct": 0.8739772000000054,
+          "net_return_pct": -2.6118148658199947,
+          "total_costs": 3485.79206582,
+          "cost_drag_pct": 3.48579206582,
+          "gross_edge_kept_pct": -298.8424487297813,
+          "max_drawdown_pct": 2.673102337773925,
+          "sharpe_daily": -1.6541556273798337,
+          "avg_exposure_pct": 0.30330824730011335,
+          "turnover": 348.5792057080228,
+          "pnl_per_unit_turnover": -7.492744326257101e-05,
+          "long_trades": 1826,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "1m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "QQQ": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:59:00+00:00",
+          "net_return_pct": -1.6775462459999946,
+          "gross_return_pct": -0.5233199999999947,
+          "sharpe_daily": -4.565789035349896,
+          "trades": 596
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:59:00+00:00",
+          "net_return_pct": -0.6230554099999952,
+          "gross_return_pct": 0.5404200000000048,
+          "sharpe_daily": -0.8677507737147334,
+          "trades": 601
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:59:00+00:00",
+          "net_return_pct": -0.31806268834999596,
+          "gross_return_pct": 0.8884743000000039,
+          "sharpe_daily": -0.7428194674884798,
+          "trades": 624
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": 0.8909150000000032,
+              "gross_return_pct": 0.8909150000000032,
+              "cost_drag_pct": 0.0,
+              "trades": 1826
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.2267,
+              "gross_return_pct": 94.2267,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -6.031622043719276,
+              "gross_return_pct": 0.8160962000000032,
+              "cost_drag_pct": 6.847718243719279,
+              "trades": 1826
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.20672221486114,
+              "gross_return_pct": 94.2267,
+              "cost_drag_pct": 0.01997778513885,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -16.93828115730599,
+              "gross_return_pct": 0.7214224000000016,
+              "cost_drag_pct": 17.659703557305992,
+              "trades": 1826
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.17175865616689,
+              "gross_return_pct": 94.22669999999998,
+              "cost_drag_pct": 0.054941343833099995,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -29.158465306657245,
+              "gross_return_pct": 0.5626972999999964,
+              "cost_drag_pct": 29.72116260665724,
+              "trades": 1826
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.1268058303338,
+              "gross_return_pct": 94.2267,
+              "cost_drag_pct": 0.09989416966619999,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "extreme_reversal_1m": {
+              "net_return_pct": -49.12485954222537,
+              "gross_return_pct": 0.3412418000000059,
+              "cost_drag_pct": 49.46610134222538,
+              "trades": 1826
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.68490779919001,
+              "gross_return_pct": 93.87900000000002,
+              "cost_drag_pct": 0.19409220081,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "extreme_reversal_1m",
+      "batch": "A"
+    },
+    "B:opening_range_breakout_5m:SPY": {
+      "timeframe": "5m",
+      "n_bars": 58326,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:55:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 1.0990423999999908,
+        "net_return_pct": 0.08804730323999088,
+        "total_costs": 1010.99509676,
+        "cost_drag_pct": 1.0109950967599999,
+        "gross_edge_kept_pct": 8.011274473122386,
+        "max_drawdown_pct": 0.9603719340434247,
+        "sharpe_daily": 0.03938148428649578,
+        "avg_exposure_pct": 5.084124296855704,
+        "turnover": 101.0995085769576,
+        "win_rate_pct": 54.03846153846153,
+        "profit_factor": 1.0091595673349025,
+        "n_closed_trades": 520,
+        "intraday": {
+          "trades": 520,
+          "trades_per_day": 0.6924101198402131,
+          "sessions": 751,
+          "avg_holding_seconds": 17968.846153846152,
+          "median_holding_seconds": 20100.0,
+          "avg_holding_minutes": 299.4807692307692,
+          "overnight_positions": 0,
+          "win_rate_pct": 54.03846153846153,
+          "profit_factor": 1.0091595673349025,
+          "avg_pnl_per_trade": 0.169321737,
+          "gross_return_pct": 1.0990423999999908,
+          "net_return_pct": 0.08804730323999088,
+          "total_costs": 1010.99509676,
+          "cost_drag_pct": 1.0109950967599999,
+          "gross_edge_kept_pct": 8.011274473122386,
+          "max_drawdown_pct": 0.9603719340434247,
+          "sharpe_daily": 0.03938148428649578,
+          "avg_exposure_pct": 5.084124296855704,
+          "turnover": 101.0995085769576,
+          "pnl_per_unit_turnover": 8.708974403467917e-06,
+          "long_trades": 520,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "5m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "SPY": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:55:00+00:00",
+          "net_return_pct": 0.2170385579999934,
+          "gross_return_pct": 0.5623599999999934,
+          "sharpe_daily": 0.3522965488064497,
+          "trades": 177
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:55:00+00:00",
+          "net_return_pct": 0.4381092810000098,
+          "gross_return_pct": 0.7788100000000098,
+          "sharpe_daily": 0.3993889445085373,
+          "trades": 176
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:55:00+00:00",
+          "net_return_pct": -0.5731985217599989,
+          "gross_return_pct": -0.25096759999999885,
+          "sharpe_daily": -0.8965652014017269,
+          "trades": 167
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": 1.0827624000000036,
+              "gross_return_pct": 1.0827624000000036,
+              "cost_drag_pct": 0.0,
+              "trades": 520
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.51413000000001,
+              "gross_return_pct": 76.51413000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -0.9391340894378764,
+              "gross_return_pct": 1.0722826000000039,
+              "cost_drag_pct": 2.01141668943788,
+              "trades": 520
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.49421197110193,
+              "gross_return_pct": 76.51413000000001,
+              "cost_drag_pct": 0.019918028898075,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -4.366204905041404,
+              "gross_return_pct": 1.0728576000000034,
+              "cost_drag_pct": 5.439062505041408,
+              "trades": 520
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.45935299311155,
+              "gross_return_pct": 76.51413,
+              "cost_drag_pct": 0.054777006888450004,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -8.617408467709197,
+              "gross_return_pct": 1.0498978000000019,
+              "cost_drag_pct": 9.667306267709199,
+              "trades": 520
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.41453462722309,
+              "gross_return_pct": 76.51413,
+              "cost_drag_pct": 0.09959537277690002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -16.92741381160995,
+              "gross_return_pct": 1.0315430000000028,
+              "cost_drag_pct": 17.95895681160995,
+              "trades": 520
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.31990164525651,
+              "gross_return_pct": 76.51413000000001,
+              "cost_drag_pct": 0.1942283547435,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "opening_range_breakout_5m",
+      "batch": "B"
+    },
+    "B:opening_range_breakout_5m:QQQ": {
+      "timeframe": "5m",
+      "n_bars": 58326,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:55:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 1.438764900000007,
+        "net_return_pct": 0.47987701689000684,
+        "total_costs": 958.88788311,
+        "cost_drag_pct": 0.95888788311,
+        "gross_edge_kept_pct": 33.35340032899083,
+        "max_drawdown_pct": 1.0781135304154144,
+        "sharpe_daily": 0.1653783604480042,
+        "avg_exposure_pct": 4.781518852996917,
+        "turnover": 95.8887868722351,
+        "win_rate_pct": 57.05521472392638,
+        "profit_factor": 1.042947902597399,
+        "n_closed_trades": 489,
+        "intraday": {
+          "trades": 489,
+          "trades_per_day": 0.6511318242343542,
+          "sessions": 751,
+          "avg_holding_seconds": 17860.122699386502,
+          "median_holding_seconds": 20100.0,
+          "avg_holding_minutes": 297.6687116564417,
+          "overnight_positions": 0,
+          "win_rate_pct": 57.05521472392638,
+          "profit_factor": 1.042947902597399,
+          "avg_pnl_per_trade": 0.9813435928220858,
+          "gross_return_pct": 1.438764900000007,
+          "net_return_pct": 0.47987701689000684,
+          "total_costs": 958.88788311,
+          "cost_drag_pct": 0.95888788311,
+          "gross_edge_kept_pct": 33.35340032899083,
+          "max_drawdown_pct": 1.0781135304154144,
+          "sharpe_daily": 0.1653783604480042,
+          "avg_exposure_pct": 4.781518852996917,
+          "turnover": 95.8887868722351,
+          "pnl_per_unit_turnover": 5.004516508582055e-05,
+          "long_trades": 489,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "5m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "QQQ": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:55:00+00:00",
+          "net_return_pct": 0.6378679210000016,
+          "gross_return_pct": 0.9630500000000015,
+          "sharpe_daily": 0.849881960576456,
+          "trades": 165
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:55:00+00:00",
+          "net_return_pct": 0.15850806399999584,
+          "gross_return_pct": 0.48561999999999583,
+          "sharpe_daily": 0.12654483732642427,
+          "trades": 168
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:55:00+00:00",
+          "net_return_pct": -0.313799800610004,
+          "gross_return_pct": -0.01203010000000404,
+          "sharpe_daily": -0.3765970747365479,
+          "trades": 156
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": 1.3795299999999955,
+              "gross_return_pct": 1.3795299999999955,
+              "cost_drag_pct": 0.0,
+              "trades": 489
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.72240000000001,
+              "gross_return_pct": 93.72240000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -0.4704177964465539,
+              "gross_return_pct": 1.4364598999999967,
+              "cost_drag_pct": 1.9068776964465506,
+              "trades": 489
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.702464612451,
+              "gross_return_pct": 93.7224,
+              "cost_drag_pct": 0.019935387549,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -3.77974417087531,
+              "gross_return_pct": 1.3738819999999996,
+              "cost_drag_pct": 5.1536261708753095,
+              "trades": 489
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.667575254706,
+              "gross_return_pct": 93.7224,
+              "cost_drag_pct": 0.05482474529399999,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -7.779371084386366,
+              "gross_return_pct": 1.3745959000000028,
+              "cost_drag_pct": 9.153966984386368,
+              "trades": 489
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.62271782941201,
+              "gross_return_pct": 93.72240000000001,
+              "cost_drag_pct": 0.099682170588,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "opening_range_breakout_5m": {
+              "net_return_pct": -15.713657866605601,
+              "gross_return_pct": 1.3399839999999976,
+              "cost_drag_pct": 17.0536418666056,
+              "trades": 489
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.52800237438,
+              "gross_return_pct": 93.7224,
+              "cost_drag_pct": 0.19439762562,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "opening_range_breakout_5m",
+      "batch": "B"
+    },
+    "C:market_intraday_momentum_30m:SPY": {
+      "timeframe": "30m",
+      "n_bars": 9721,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.07056000000000351,
+        "net_return_pct": -0.7726831369999965,
+        "total_costs": 843.243137,
+        "cost_drag_pct": 0.843243137,
+        "gross_edge_kept_pct": -1095.0724730725028,
+        "max_drawdown_pct": 0.7932427301375999,
+        "sharpe_daily": -1.1370250073010935,
+        "avg_exposure_pct": 0.0,
+        "turnover": 84.32431362944,
+        "win_rate_pct": 44.16475972540046,
+        "profit_factor": 0.7569357044274027,
+        "n_closed_trades": 437,
+        "intraday": {
+          "trades": 437,
+          "trades_per_day": 0.5818908122503329,
+          "sessions": 751,
+          "avg_holding_seconds": 1800.0,
+          "median_holding_seconds": 1800.0,
+          "avg_holding_minutes": 30.0,
+          "overnight_positions": 0,
+          "win_rate_pct": 44.16475972540046,
+          "profit_factor": 0.7569357044274027,
+          "avg_pnl_per_trade": -1.7681536315789474,
+          "gross_return_pct": 0.07056000000000351,
+          "net_return_pct": -0.7726831369999965,
+          "total_costs": 843.243137,
+          "cost_drag_pct": 0.843243137,
+          "gross_edge_kept_pct": -1095.0724730725028,
+          "max_drawdown_pct": 0.7932427301375999,
+          "sharpe_daily": -1.1370250073010935,
+          "avg_exposure_pct": 0.0,
+          "turnover": 84.32431362944,
+          "pnl_per_unit_turnover": -9.163230671470664e-05,
+          "long_trades": 437,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "30m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "SPY": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": -0.20278347000000085,
+          "gross_return_pct": 0.1006799999999991,
+          "sharpe_daily": -0.8418527220091553,
+          "trades": 156
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": -0.15916836099999498,
+          "gross_return_pct": 0.10511000000000503,
+          "sharpe_daily": -0.6240365731995796,
+          "trades": 137
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": -0.4124104860000033,
+          "gross_return_pct": -0.13765000000000327,
+          "sharpe_daily": -2.3005589835272695,
+          "trades": 143
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": 0.07046500000000844,
+              "gross_return_pct": 0.07046500000000844,
+              "cost_drag_pct": 0.0,
+              "trades": 437
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.47948,
+              "gross_return_pct": 76.47948,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -1.6074165354495795,
+              "gross_return_pct": 0.0733899999999954,
+              "cost_drag_pct": 1.680806535449575,
+              "trades": 437
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.45955504084205,
+              "gross_return_pct": 76.47948,
+              "cost_drag_pct": 0.01992495915795,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -4.475010304400895,
+              "gross_return_pct": 0.07998000000000527,
+              "cost_drag_pct": 4.5549903044009,
+              "trades": 437
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.42468393405231,
+              "gross_return_pct": 76.47948000000001,
+              "cost_drag_pct": 0.05479606594770001,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -8.05557626926655,
+              "gross_return_pct": 0.06370499999999879,
+              "cost_drag_pct": 8.11928126926655,
+              "trades": 437
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.3798499741046,
+              "gross_return_pct": 76.47948,
+              "cost_drag_pct": 0.0996300258954,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -15.133608708428248,
+              "gross_return_pct": 0.05520500000000261,
+              "cost_drag_pct": 15.18881370842825,
+              "trades": 437
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.28518406562901,
+              "gross_return_pct": 76.47948000000001,
+              "cost_drag_pct": 0.19429593437099998,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "market_intraday_momentum_30m",
+      "batch": "C"
+    },
+    "C:market_intraday_momentum_30m:QQQ": {
+      "timeframe": "30m",
+      "n_bars": 9721,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.22151940000000503,
+        "net_return_pct": -0.6009169986599949,
+        "total_costs": 822.43639866,
+        "cost_drag_pct": 0.82243639866,
+        "gross_edge_kept_pct": -271.270596913851,
+        "max_drawdown_pct": 0.8607315196954235,
+        "sharpe_daily": -0.7740156940077995,
+        "avg_exposure_pct": 0.0,
+        "turnover": 82.2436396444806,
+        "win_rate_pct": 46.588235294117645,
+        "profit_factor": 0.8313751523520613,
+        "n_closed_trades": 425,
+        "intraday": {
+          "trades": 425,
+          "trades_per_day": 0.5659121171770972,
+          "sessions": 751,
+          "avg_holding_seconds": 1800.0,
+          "median_holding_seconds": 1800.0,
+          "avg_holding_minutes": 30.0,
+          "overnight_positions": 0,
+          "win_rate_pct": 46.588235294117645,
+          "profit_factor": 0.8313751523520613,
+          "avg_pnl_per_trade": -1.4139223497882352,
+          "gross_return_pct": 0.22151940000000503,
+          "net_return_pct": -0.6009169986599949,
+          "total_costs": 822.43639866,
+          "cost_drag_pct": 0.82243639866,
+          "gross_edge_kept_pct": -271.270596913851,
+          "max_drawdown_pct": 0.8607315196954235,
+          "sharpe_daily": -0.7740156940077995,
+          "avg_exposure_pct": 0.0,
+          "turnover": 82.2436396444806,
+          "pnl_per_unit_turnover": -7.306546758601809e-05,
+          "long_trades": 425,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "30m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "QQQ": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": -0.3618289579999989,
+          "gross_return_pct": -0.07069999999999893,
+          "sharpe_daily": -1.436737399828555,
+          "trades": 149
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": -0.11811911600000391,
+          "gross_return_pct": 0.15015999999999607,
+          "sharpe_daily": -0.41095800360746615,
+          "trades": 138
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": -0.11354211866000385,
+          "gross_return_pct": 0.15075939999999616,
+          "sharpe_daily": -0.4782199268483291,
+          "trades": 137
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": 0.2249793999999916,
+              "gross_return_pct": 0.2249793999999916,
+              "cost_drag_pct": 0.0,
+              "trades": 425
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.49289999999999,
+              "gross_return_pct": 93.49289999999999,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -1.426259111723105,
+              "gross_return_pct": 0.21291939999999965,
+              "cost_drag_pct": 1.6391785117231046,
+              "trades": 425
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.47291871072976,
+              "gross_return_pct": 93.4929,
+              "cost_drag_pct": 0.019981289270250002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -4.240005861986473,
+              "gross_return_pct": 0.20318940000000296,
+              "cost_drag_pct": 4.443195261986476,
+              "trades": 425
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.4379490193785,
+              "gross_return_pct": 93.49289999999999,
+              "cost_drag_pct": 0.0549509806215,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -7.702505601837506,
+              "gross_return_pct": 0.2095832999999958,
+              "cost_drag_pct": 7.912088901837502,
+              "trades": 425
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.0470883520579,
+              "gross_return_pct": 93.14663,
+              "cost_drag_pct": 0.09954164794210002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "market_intraday_momentum_30m": {
+              "net_return_pct": -14.670192296149976,
+              "gross_return_pct": 0.18345720000000654,
+              "cost_drag_pct": 14.853649496149982,
+              "trades": 425
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 92.9525064180585,
+              "gross_return_pct": 93.14663,
+              "cost_drag_pct": 0.1941235819415,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "market_intraday_momentum_30m",
+      "batch": "C"
+    },
+    "C:market_intraday_momentum_30m_long_short:SPY": {
+      "timeframe": "30m",
+      "n_bars": 9721,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.10571880000000267,
+        "net_return_pct": -1.3326006148799974,
+        "total_costs": 1438.31941488,
+        "cost_drag_pct": 1.43831941488,
+        "gross_edge_kept_pct": -1260.5143218424384,
+        "max_drawdown_pct": 1.4973952030705173,
+        "sharpe_daily": -1.3368484093045878,
+        "avg_exposure_pct": 0.0,
+        "turnover": 143.8319413822812,
+        "win_rate_pct": 44.042838018741634,
+        "profit_factor": 0.7774082555867441,
+        "n_closed_trades": 747,
+        "intraday": {
+          "trades": 747,
+          "trades_per_day": 0.9946737683089214,
+          "sessions": 751,
+          "avg_holding_seconds": 1800.0,
+          "median_holding_seconds": 1800.0,
+          "avg_holding_minutes": 30.0,
+          "overnight_positions": 0,
+          "win_rate_pct": 44.042838018741634,
+          "profit_factor": 0.7774082555867441,
+          "avg_pnl_per_trade": -1.7839365661044175,
+          "gross_return_pct": 0.10571880000000267,
+          "net_return_pct": -1.3326006148799974,
+          "total_costs": 1438.31941488,
+          "cost_drag_pct": 1.43831941488,
+          "gross_edge_kept_pct": -1260.5143218424384,
+          "max_drawdown_pct": 1.4973952030705173,
+          "sharpe_daily": -1.3368484093045878,
+          "avg_exposure_pct": 0.0,
+          "turnover": 143.8319413822812,
+          "pnl_per_unit_turnover": -9.264983855972354e-05,
+          "long_trades": 437,
+          "short_trades": 310,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "30m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "SPY": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": -0.28327579400000413,
+          "gross_return_pct": 0.20095999999999586,
+          "sharpe_daily": -0.8391960523725271,
+          "trades": 249
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": -0.5418205649999952,
+          "gross_return_pct": -0.06140999999999519,
+          "sharpe_daily": -1.3610593702386233,
+          "trades": 249
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": -0.4929407308699951,
+          "gross_return_pct": -0.018281299999995115,
+          "sharpe_daily": -1.9878596591866409,
+          "trades": 247
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": 0.09789870000000978,
+              "gross_return_pct": 0.09789870000000978,
+              "cost_drag_pct": 0.0,
+              "trades": 747
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.47948,
+              "gross_return_pct": 76.47948,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -2.7556996370134645,
+              "gross_return_pct": 0.09953879999999415,
+              "cost_drag_pct": 2.8552384370134587,
+              "trades": 747
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.45955504084205,
+              "gross_return_pct": 76.47948,
+              "cost_drag_pct": 0.01992495915795,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -7.57615283280173,
+              "gross_return_pct": 0.08418379999999814,
+              "cost_drag_pct": 7.660336632801728,
+              "trades": 747
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.42468393405231,
+              "gross_return_pct": 76.47948000000001,
+              "cost_drag_pct": 0.05479606594770001,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -13.356294441364403,
+              "gross_return_pct": 0.08372889999999522,
+              "cost_drag_pct": 13.440023341364398,
+              "trades": 747
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.3798499741046,
+              "gross_return_pct": 76.47948,
+              "cost_drag_pct": 0.0996300258954,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -24.390809460451813,
+              "gross_return_pct": 0.09940910000000258,
+              "cost_drag_pct": 24.490218560451815,
+              "trades": 747
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.28518406562901,
+              "gross_return_pct": 76.47948000000001,
+              "cost_drag_pct": 0.19429593437099998,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "market_intraday_momentum_30m_long_short",
+      "batch": "C"
+    },
+    "C:market_intraday_momentum_30m_long_short:QQQ": {
+      "timeframe": "30m",
+      "n_bars": 9721,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.08496959999999443,
+        "net_return_pct": -1.3599572312400054,
+        "total_costs": 1444.92683124,
+        "cost_drag_pct": 1.4449268312399999,
+        "gross_edge_kept_pct": -1600.5221058356103,
+        "max_drawdown_pct": 1.789014612652573,
+        "sharpe_daily": -1.1076111349516433,
+        "avg_exposure_pct": 0.0,
+        "turnover": 144.4926830390304,
+        "win_rate_pct": 46.0,
+        "profit_factor": 0.812195937228003,
+        "n_closed_trades": 750,
+        "intraday": {
+          "trades": 750,
+          "trades_per_day": 0.9986684420772304,
+          "sessions": 751,
+          "avg_holding_seconds": 1800.0,
+          "median_holding_seconds": 1800.0,
+          "avg_holding_minutes": 30.0,
+          "overnight_positions": 0,
+          "win_rate_pct": 46.0,
+          "profit_factor": 0.812195937228003,
+          "avg_pnl_per_trade": -1.81327630832,
+          "gross_return_pct": 0.08496959999999443,
+          "net_return_pct": -1.3599572312400054,
+          "total_costs": 1444.92683124,
+          "cost_drag_pct": 1.4449268312399999,
+          "gross_edge_kept_pct": -1600.5221058356103,
+          "max_drawdown_pct": 1.789014612652573,
+          "sharpe_daily": -1.1076111349516433,
+          "avg_exposure_pct": 0.0,
+          "turnover": 144.4926830390304,
+          "pnl_per_unit_turnover": -9.411945315408487e-05,
+          "long_trades": 425,
+          "short_trades": 325,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "30m",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "QQQ": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": -0.5183149069999948,
+          "gross_return_pct": -0.030749999999994837,
+          "sharpe_daily": -1.2827117106010077,
+          "trades": 250
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": -0.6433980029999953,
+          "gross_return_pct": -0.1598699999999953,
+          "sharpe_daily": -1.3721186590538819,
+          "trades": 249
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": -0.1544784738400029,
+          "gross_return_pct": 0.32598559999999716,
+          "sharpe_daily": -0.4351110580985187,
+          "trades": 249
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": 0.09249559999999768,
+              "gross_return_pct": 0.09249559999999768,
+              "cost_drag_pct": 0.0,
+              "trades": 750
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.49289999999999,
+              "gross_return_pct": 93.49289999999999,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -2.782467211803352,
+              "gross_return_pct": 0.09021960000000062,
+              "cost_drag_pct": 2.872686811803353,
+              "trades": 750
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.47291871072976,
+              "gross_return_pct": 93.4929,
+              "cost_drag_pct": 0.019981289270250002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -7.6011495417897645,
+              "gross_return_pct": 0.08789410000000064,
+              "cost_drag_pct": 7.689043641789765,
+              "trades": 750
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.4379490193785,
+              "gross_return_pct": 93.49289999999999,
+              "cost_drag_pct": 0.0549509806215,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -13.491186544429167,
+              "gross_return_pct": 0.050787000000003246,
+              "cost_drag_pct": 13.54197354442917,
+              "trades": 750
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.0470883520579,
+              "gross_return_pct": 93.14663,
+              "cost_drag_pct": 0.09954164794210002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "market_intraday_momentum_30m_long_short": {
+              "net_return_pct": -24.538240166569214,
+              "gross_return_pct": 0.024245100000005237,
+              "cost_drag_pct": 24.56248526656922,
+              "trades": 750
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 92.9525064180585,
+              "gross_return_pct": 93.14663,
+              "cost_drag_pct": 0.1941235819415,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "market_intraday_momentum_30m_long_short",
+      "batch": "C"
+    },
+    "D:smart_technical:SPY": {
+      "timeframe": "1m",
+      "n_bars": 291630,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:59:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 2.6166666000000025,
+        "net_return_pct": -2.4573093868999973,
+        "total_costs": 5073.9759869,
+        "cost_drag_pct": 5.0739759869,
+        "gross_edge_kept_pct": -93.90991526776835,
+        "max_drawdown_pct": 3.082030517458967,
+        "sharpe_daily": -0.7863656864724728,
+        "avg_exposure_pct": 5.192975218076488,
+        "turnover": 507.3975960733334,
+        "win_rate_pct": 34.04013631200303,
+        "profit_factor": 0.9089189946987009,
+        "n_closed_trades": 2641
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:59:00+00:00",
+          "net_return_pct": -0.4924300720000052,
+          "gross_return_pct": 1.1954799999999945,
+          "sharpe_daily": -0.5670979790120387,
+          "trades": 867
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:59:00+00:00",
+          "net_return_pct": -0.24669851399999887,
+          "gross_return_pct": 1.457870000000001,
+          "sharpe_daily": -0.17817186964097662,
+          "trades": 881
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:59:00+00:00",
+          "net_return_pct": -1.7648802909900008,
+          "gross_return_pct": -0.06276450000000056,
+          "sharpe_daily": -1.9825815101817452,
+          "trades": 892
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": 2.6556935999999975,
+              "gross_return_pct": 2.6556935999999975,
+              "cost_drag_pct": 0.0,
+              "trades": 2641
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 77.00312,
+              "gross_return_pct": 77.00312,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -7.348156606632417,
+              "gross_return_pct": 2.561010600000003,
+              "cost_drag_pct": 9.90916720663242,
+              "trades": 2641
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.98314729905181,
+              "gross_return_pct": 77.00312000000001,
+              "cost_drag_pct": 0.0199727009482,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -22.492898475804456,
+              "gross_return_pct": 2.3910120000000035,
+              "cost_drag_pct": 24.88391047580446,
+              "trades": 2641
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.94819263831081,
+              "gross_return_pct": 77.00312000000001,
+              "cost_drag_pct": 0.054927361689200004,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -38.19775628661032,
+              "gross_return_pct": 2.24210759999999,
+              "cost_drag_pct": 40.43986388661031,
+              "trades": 2641
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.9032512526216,
+              "gross_return_pct": 77.00312,
+              "cost_drag_pct": 0.0998687473784,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -61.25514810521939,
+              "gross_return_pct": 1.8845160000000192,
+              "cost_drag_pct": 63.13966410521941,
+              "trades": 2641
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.4772880062345,
+              "gross_return_pct": 76.67121,
+              "cost_drag_pct": 0.19392199376549998,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "smart_technical",
+      "batch": "D"
+    },
+    "D:smart_technical:QQQ": {
+      "timeframe": "1m",
+      "n_bars": 291630,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:59:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 2.680752000000004,
+        "net_return_pct": -2.488662807319997,
+        "total_costs": 5169.41480732,
+        "cost_drag_pct": 5.169414807320001,
+        "gross_edge_kept_pct": -92.83450342739623,
+        "max_drawdown_pct": 3.4263087567602435,
+        "sharpe_daily": -0.5983435268933207,
+        "avg_exposure_pct": 5.21226164424682,
+        "turnover": 516.9414780512479,
+        "win_rate_pct": 35.109951546775996,
+        "profit_factor": 0.9308619892326069,
+        "n_closed_trades": 2683
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:59:00+00:00",
+          "net_return_pct": -0.7481856700000011,
+          "gross_return_pct": 1.013469999999999,
+          "sharpe_daily": -0.6101587373744196,
+          "trades": 902
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:59:00+00:00",
+          "net_return_pct": -0.19980171800000335,
+          "gross_return_pct": 1.5724999999999965,
+          "sharpe_daily": -0.11621208583458484,
+          "trades": 912
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:59:00+00:00",
+          "net_return_pct": -1.5532397263199993,
+          "gross_return_pct": 0.10879200000000067,
+          "sharpe_daily": -1.1836795546766965,
+          "trades": 868
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": 2.7406427000000066,
+              "gross_return_pct": 2.7406427000000066,
+              "cost_drag_pct": 0.0,
+              "trades": 2683
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.2267,
+              "gross_return_pct": 94.2267,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -7.399200605307388,
+              "gross_return_pct": 2.668347600000007,
+              "cost_drag_pct": 10.067548205307395,
+              "trades": 2683
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.20672221486114,
+              "gross_return_pct": 94.2267,
+              "cost_drag_pct": 0.01997778513885,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -22.80052702183937,
+              "gross_return_pct": 2.4677918000000005,
+              "cost_drag_pct": 25.26831882183937,
+              "trades": 2683
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.17175865616689,
+              "gross_return_pct": 94.22669999999998,
+              "cost_drag_pct": 0.054941343833099995,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -38.6945138955131,
+              "gross_return_pct": 2.279854500000006,
+              "cost_drag_pct": 40.9743683955131,
+              "trades": 2683
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.1268058303338,
+              "gross_return_pct": 94.2267,
+              "cost_drag_pct": 0.09989416966619999,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "smart_technical": {
+              "net_return_pct": -62.10087777945188,
+              "gross_return_pct": 1.7626374999999967,
+              "cost_drag_pct": 63.863515279451875,
+              "trades": 2683
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.68490779919001,
+              "gross_return_pct": 93.87900000000002,
+              "cost_drag_pct": 0.19409220081,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "smart_technical",
+      "batch": "D"
+    },
+    "D:intraday_momentum_5m:SPY": {
+      "timeframe": "5m",
+      "n_bars": 58326,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:55:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 2.700130899999998,
+        "net_return_pct": -0.009853112250002294,
+        "total_costs": 2709.98401225,
+        "cost_drag_pct": 2.70998401225,
+        "gross_edge_kept_pct": -0.36491239184005125,
+        "max_drawdown_pct": 1.9774412549743103,
+        "sharpe_daily": 0.0024996340019336986,
+        "avg_exposure_pct": 5.621521202439111,
+        "turnover": 270.99839852486906,
+        "win_rate_pct": 34.770114942528735,
+        "profit_factor": 0.9995121697758598,
+        "n_closed_trades": 1392
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:55:00+00:00",
+          "net_return_pct": 0.46635733400000046,
+          "gross_return_pct": 1.4004400000000006,
+          "sharpe_daily": 0.49028165107014815,
+          "trades": 478
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:55:00+00:00",
+          "net_return_pct": 0.26495990899999544,
+          "gross_return_pct": 1.1377599999999954,
+          "sharpe_daily": 0.20193720157715994,
+          "trades": 450
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:55:00+00:00",
+          "net_return_pct": -0.8352111483600044,
+          "gross_return_pct": 0.05192199999999558,
+          "sharpe_daily": -0.9342364897838641,
+          "trades": 463
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": 2.763400799999993,
+              "gross_return_pct": 2.763400799999993,
+              "cost_drag_pct": 0.0,
+              "trades": 1392
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.51413000000001,
+              "gross_return_pct": 76.51413000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -2.6356679063993305,
+              "gross_return_pct": 2.7094220000000044,
+              "cost_drag_pct": 5.345089906399335,
+              "trades": 1392
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.49421197110193,
+              "gross_return_pct": 76.51413000000001,
+              "cost_drag_pct": 0.019918028898075,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -11.405472617460099,
+              "gross_return_pct": 2.616775500000003,
+              "cost_drag_pct": 14.022248117460101,
+              "trades": 1392
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.45935299311155,
+              "gross_return_pct": 76.51413,
+              "cost_drag_pct": 0.054777006888450004,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -21.48911402427336,
+              "gross_return_pct": 2.5302960000000034,
+              "cost_drag_pct": 24.019410024273363,
+              "trades": 1392
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.41453462722309,
+              "gross_return_pct": 76.51413,
+              "cost_drag_pct": 0.09959537277690002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -38.855117037101024,
+              "gross_return_pct": 2.3588685,
+              "cost_drag_pct": 41.213985537101024,
+              "trades": 1392
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.31990164525651,
+              "gross_return_pct": 76.51413000000001,
+              "cost_drag_pct": 0.1942283547435,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "intraday_momentum_5m",
+      "batch": "D"
+    },
+    "D:intraday_momentum_5m:QQQ": {
+      "timeframe": "5m",
+      "n_bars": 58326,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:55:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 2.977615699999996,
+        "net_return_pct": 0.2181213248499958,
+        "total_costs": 2759.49437515,
+        "cost_drag_pct": 2.75949437515,
+        "gross_edge_kept_pct": 7.325368577617189,
+        "max_drawdown_pct": 2.194991410507041,
+        "sharpe_daily": 0.05825322422069951,
+        "avg_exposure_pct": 5.583930282558153,
+        "turnover": 275.94943453738426,
+        "win_rate_pct": 36.059743954480794,
+        "profit_factor": 1.0080837978143877,
+        "n_closed_trades": 1406
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:55:00+00:00",
+          "net_return_pct": 0.6460770089999901,
+          "gross_return_pct": 1.5537099999999902,
+          "sharpe_daily": 0.5137621981409267,
+          "trades": 461
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:55:00+00:00",
+          "net_return_pct": 0.40463025799999386,
+          "gross_return_pct": 1.3048999999999937,
+          "sharpe_daily": 0.25904619801886125,
+          "trades": 461
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:55:00+00:00",
+          "net_return_pct": -1.0323095928699955,
+          "gross_return_pct": -0.10239169999999553,
+          "sharpe_daily": -0.7643803784550123,
+          "trades": 483
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": 3.0155559,
+              "gross_return_pct": 3.0155559,
+              "cost_drag_pct": 0.0,
+              "trades": 1406
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.72240000000001,
+              "gross_return_pct": 93.72240000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -2.4971508134090437,
+              "gross_return_pct": 2.9401269000000045,
+              "cost_drag_pct": 5.437277713409048,
+              "trades": 1406
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.702464612451,
+              "gross_return_pct": 93.7224,
+              "cost_drag_pct": 0.019935387549,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -11.364334752141792,
+              "gross_return_pct": 2.8767379000000037,
+              "cost_drag_pct": 14.241072652141796,
+              "trades": 1406
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.667575254706,
+              "gross_return_pct": 93.7224,
+              "cost_drag_pct": 0.05482474529399999,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -21.552608281761444,
+              "gross_return_pct": 2.795983999999997,
+              "cost_drag_pct": 24.34859228176144,
+              "trades": 1406
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.62271782941201,
+              "gross_return_pct": 93.72240000000001,
+              "cost_drag_pct": 0.099682170588,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "intraday_momentum_5m": {
+              "net_return_pct": -39.273189092930835,
+              "gross_return_pct": 2.574011900000002,
+              "cost_drag_pct": 41.84720099293084,
+              "trades": 1406
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.52800237438,
+              "gross_return_pct": 93.7224,
+              "cost_drag_pct": 0.19439762562,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "intraday_momentum_5m",
+      "batch": "D"
+    },
+    "D:intraday_momentum_15m:SPY": {
+      "timeframe": "15m",
+      "n_bars": 19442,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:45:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 2.9319162999999975,
+        "net_return_pct": 1.4190327146299975,
+        "total_costs": 1512.88358537,
+        "cost_drag_pct": 1.51288358537,
+        "gross_edge_kept_pct": 48.39949607804284,
+        "max_drawdown_pct": 1.6669100751494303,
+        "sharpe_daily": 0.43539947775271737,
+        "avg_exposure_pct": 5.416226616793595,
+        "turnover": 151.2883556050837,
+        "win_rate_pct": 37.25743855109961,
+        "profit_factor": 1.1002149548507134,
+        "n_closed_trades": 773
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:45:00+00:00",
+          "net_return_pct": 0.5505529119999908,
+          "gross_return_pct": 1.0902199999999906,
+          "sharpe_daily": 0.6176668858191077,
+          "trades": 276
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:45:00+00:00",
+          "net_return_pct": 0.738682529000001,
+          "gross_return_pct": 1.214000000000001,
+          "sharpe_daily": 0.5415807948564009,
+          "trades": 244
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:45:00+00:00",
+          "net_return_pct": 0.07296212962999427,
+          "gross_return_pct": 0.5622762999999943,
+          "sharpe_daily": 0.08267722136436637,
+          "trades": 253
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": 2.915446300000002,
+              "gross_return_pct": 2.915446300000002,
+              "cost_drag_pct": 0.0,
+              "trades": 773
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.50950999999999,
+              "gross_return_pct": 76.50950999999999,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -0.05180738861240153,
+              "gross_return_pct": 2.950346300000001,
+              "cost_drag_pct": 3.0021536886124025,
+              "trades": 773
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.48959104706728,
+              "gross_return_pct": 76.50951,
+              "cost_drag_pct": 0.019918952932725005,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -5.195549293998091,
+              "gross_return_pct": 2.8409312000000053,
+              "cost_drag_pct": 8.036480493998097,
+              "trades": 773
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.45473045190366,
+              "gross_return_pct": 76.50951,
+              "cost_drag_pct": 0.054779548096349995,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -11.390628963330396,
+              "gross_return_pct": 2.7285511000000042,
+              "cost_drag_pct": 14.1191800633304,
+              "trades": 773
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.40991000680731,
+              "gross_return_pct": 76.50951,
+              "cost_drag_pct": 0.09959999319269999,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -23.063575603492648,
+              "gross_return_pct": 2.573021000000004,
+              "cost_drag_pct": 25.636596603492652,
+              "trades": 773
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.31527263463951,
+              "gross_return_pct": 76.50951,
+              "cost_drag_pct": 0.19423736536050001,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "intraday_momentum_15m",
+      "batch": "D"
+    },
+    "D:intraday_momentum_15m:QQQ": {
+      "timeframe": "15m",
+      "n_bars": 19442,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:45:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 0.9920423,
+        "net_return_pct": -0.5268496597299999,
+        "total_costs": 1518.89195973,
+        "cost_drag_pct": 1.51889195973,
+        "gross_edge_kept_pct": -53.10758016366841,
+        "max_drawdown_pct": 3.3864649374464872,
+        "sharpe_daily": -0.11360793189568051,
+        "avg_exposure_pct": 5.357901537991858,
+        "turnover": 151.88919498095768,
+        "win_rate_pct": 37.24226804123711,
+        "profit_factor": 0.974227642420956,
+        "n_closed_trades": 776
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:45:00+00:00",
+          "net_return_pct": 0.13780689900000365,
+          "gross_return_pct": 0.6379100000000036,
+          "sharpe_daily": 0.11586636355990552,
+          "trades": 252
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:45:00+00:00",
+          "net_return_pct": 0.08616787599999842,
+          "gross_return_pct": 0.5777599999999985,
+          "sharpe_daily": 0.058460044272319794,
+          "trades": 252
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:45:00+00:00",
+          "net_return_pct": -1.0672605632800036,
+          "gross_return_pct": -0.5448122000000037,
+          "sharpe_daily": -0.80821908097797,
+          "trades": 271
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": 0.9043597000000014,
+              "gross_return_pct": 0.9043597000000014,
+              "cost_drag_pct": 0.0,
+              "trades": 776
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.61710000000001,
+              "gross_return_pct": 93.61710000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -2.0825999115973937,
+              "gross_return_pct": 0.9283477999999978,
+              "cost_drag_pct": 3.0109477115973915,
+              "trades": 776
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.59714355166125,
+              "gross_return_pct": 93.6171,
+              "cost_drag_pct": 0.019956448338750002,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -7.137125477543826,
+              "gross_return_pct": 0.9180261000000005,
+              "cost_drag_pct": 8.055151577543826,
+              "trades": 776
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.5622173349675,
+              "gross_return_pct": 93.6171,
+              "cost_drag_pct": 0.0548826650325,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -13.186423462273645,
+              "gross_return_pct": 0.9447372999999981,
+              "cost_drag_pct": 14.131160762273643,
+              "trades": 776
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.517312519935,
+              "gross_return_pct": 93.61710000000001,
+              "cost_drag_pct": 0.099787480065,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "intraday_momentum_15m": {
+              "net_return_pct": -24.744187659478744,
+              "gross_return_pct": 0.9744035999999916,
+              "cost_drag_pct": 25.718591259478735,
+              "trades": 776
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.422497002525,
+              "gross_return_pct": 93.61710000000001,
+              "cost_drag_pct": 0.19460299747499998,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "intraday_momentum_15m",
+      "batch": "D"
+    },
+    "D:hourly_trend:SPY": {
+      "timeframe": "1h",
+      "n_bars": 5236,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 3.9720600000000026,
+        "net_return_pct": 3.8889937480000025,
+        "total_costs": 83.066252,
+        "cost_drag_pct": 0.08306625200000001,
+        "gross_edge_kept_pct": 97.90873622251426,
+        "max_drawdown_pct": 0.890677913674176,
+        "sharpe_daily": 1.4778348448662644,
+        "avg_exposure_pct": 6.2084695374412,
+        "turnover": 8.30663113836,
+        "win_rate_pct": 46.34146341463415,
+        "profit_factor": 2.698343985465978,
+        "n_closed_trades": 41
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": 2.6075617050000055,
+          "gross_return_pct": 2.6275900000000054,
+          "sharpe_daily": 3.102077578845494,
+          "trades": 10
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": 0.48583305300000657,
+          "gross_return_pct": 0.5159000000000066,
+          "sharpe_daily": 0.5388343023782289,
+          "trades": 15
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": 0.41935087200000165,
+          "gross_return_pct": 0.44952000000000164,
+          "sharpe_daily": 0.5152123661775078,
+          "trades": 15
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 3.97114999999999,
+              "gross_return_pct": 3.97114999999999,
+              "cost_drag_pct": 0.0,
+              "trades": 41
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 77.04256000000001,
+              "gross_return_pct": 77.04256000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 3.80592745146231,
+              "gross_return_pct": 3.9720600000000097,
+              "cost_drag_pct": 0.16613254853770001,
+              "trades": 41
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 77.0225951873476,
+              "gross_return_pct": 77.04256000000001,
+              "cost_drag_pct": 0.019964812652399997,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 3.477784581028698,
+              "gross_return_pct": 3.9332799999999977,
+              "cost_drag_pct": 0.4554954189713,
+              "trades": 41
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.98765433208561,
+              "gross_return_pct": 77.04256000000001,
+              "cost_drag_pct": 0.0549056679144,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 3.11688701301589,
+              "gross_return_pct": 3.94392999999999,
+              "cost_drag_pct": 0.8270429869841001,
+              "trades": 41
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.9427306961712,
+              "gross_return_pct": 77.04256,
+              "cost_drag_pct": 0.09982930382879998,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 2.3441839855449897,
+              "gross_return_pct": 3.94911999999999,
+              "cost_drag_pct": 1.604936014455,
+              "trades": 41
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.516634596479,
+              "gross_return_pct": 76.71047999999999,
+              "cost_drag_pct": 0.19384540352100002,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "hourly_trend",
+      "batch": "D"
+    },
+    "D:hourly_trend:QQQ": {
+      "timeframe": "1h",
+      "n_bars": 5236,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "per_symbol",
+        "gross_return_pct": 4.257630000000001,
+        "net_return_pct": 4.161535211,
+        "total_costs": 96.094789,
+        "cost_drag_pct": 0.09609478900000001,
+        "gross_edge_kept_pct": 97.74299812336909,
+        "max_drawdown_pct": 1.3643893207745394,
+        "sharpe_daily": 1.0673823346549534,
+        "avg_exposure_pct": 5.958349233434563,
+        "turnover": 9.60948467029,
+        "win_rate_pct": 48.93617021276596,
+        "profit_factor": 2.208700791878929,
+        "n_closed_trades": 47
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": 2.700362567999992,
+          "gross_return_pct": 2.724679999999992,
+          "sharpe_daily": 2.4100501353660366,
+          "trades": 12
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": 0.5705135189999933,
+          "gross_return_pct": 0.6026699999999933,
+          "sharpe_daily": 0.445808591627414,
+          "trades": 16
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": 0.39887167599998996,
+          "gross_return_pct": 0.43504999999998994,
+          "sharpe_daily": 0.29352853510932037,
+          "trades": 18
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 4.25762999999999,
+              "gross_return_pct": 4.25762999999999,
+              "cost_drag_pct": 0.0,
+              "trades": 47
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.26735,
+              "gross_return_pct": 94.26735,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 4.065440378722829,
+              "gross_return_pct": 4.257630000000004,
+              "cost_drag_pct": 0.192189621277175,
+              "trades": 47
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.24738034516602,
+              "gross_return_pct": 94.26735,
+              "cost_drag_pct": 0.019969654833974997,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 3.7369738176308065,
+              "gross_return_pct": 4.264160000000007,
+              "cost_drag_pct": 0.5271861823692,
+              "trades": 47
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.21243101549615,
+              "gross_return_pct": 94.26735000000001,
+              "cost_drag_pct": 0.054918984503849994,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 3.261000166544692,
+              "gross_return_pct": 4.2117499999999914,
+              "cost_drag_pct": 0.9507498334553,
+              "trades": 47
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.1674964839923,
+              "gross_return_pct": 94.26735,
+              "cost_drag_pct": 0.09985351600769998,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "hourly_trend": {
+              "net_return_pct": 2.352443472242993,
+              "gross_return_pct": 4.202899999999993,
+              "cost_drag_pct": 1.850456527757,
+              "trades": 47
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.725486788365,
+              "gross_return_pct": 93.9195,
+              "cost_drag_pct": 0.194013211635,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "hourly_trend",
+      "batch": "D"
+    },
+    "D:hourly_trend_intraday:SPY": {
+      "timeframe": "1h",
+      "n_bars": 5236,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 0.9922037000000014,
+        "net_return_pct": 0.23250638237000132,
+        "total_costs": 759.69731763,
+        "cost_drag_pct": 0.75969731763,
+        "gross_edge_kept_pct": 23.43333151952578,
+        "max_drawdown_pct": 0.5540645735143568,
+        "sharpe_daily": 0.1811438874756232,
+        "avg_exposure_pct": 3.2651454536012654,
+        "turnover": 75.9697307707963,
+        "win_rate_pct": 50.89514066496164,
+        "profit_factor": 1.0440114392437607,
+        "n_closed_trades": 391,
+        "intraday": {
+          "trades": 391,
+          "trades_per_day": 0.5206391478029294,
+          "sessions": 751,
+          "avg_holding_seconds": 19813.81074168798,
+          "median_holding_seconds": 21600.0,
+          "avg_holding_minutes": 330.23017902813297,
+          "overnight_positions": 0,
+          "win_rate_pct": 50.89514066496164,
+          "profit_factor": 1.0440114392437607,
+          "avg_pnl_per_trade": 0.5946454792071612,
+          "gross_return_pct": 0.9922037000000014,
+          "net_return_pct": 0.23250638237000132,
+          "total_costs": 759.69731763,
+          "cost_drag_pct": 0.75969731763,
+          "gross_edge_kept_pct": 23.43333151952578,
+          "max_drawdown_pct": 0.5540645735143568,
+          "sharpe_daily": 0.1811438874756232,
+          "avg_exposure_pct": 3.2651454536012654,
+          "turnover": 75.9697307707963,
+          "pnl_per_unit_turnover": 3.060513444117399e-05,
+          "long_trades": 391,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "1h",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "SPY": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": 0.09249096699999182,
+          "gross_return_pct": 0.36566999999999183,
+          "sharpe_daily": 0.19401213548494278,
+          "trades": 140
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": 0.19026977600000716,
+          "gross_return_pct": 0.4380800000000072,
+          "sharpe_daily": 0.49775180942890407,
+          "trades": 128
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": -0.022706412630002504,
+          "gross_return_pct": 0.1895936999999975,
+          "sharpe_daily": -0.053302693331934985,
+          "trades": 110
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": 0.9901386999999984,
+              "gross_return_pct": 0.9901386999999984,
+              "cost_drag_pct": 0.0,
+              "trades": 391
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 77.04256000000001,
+              "gross_return_pct": 77.04256000000001,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -0.5071867837236677,
+              "gross_return_pct": 1.0048437000000046,
+              "cost_drag_pct": 1.5120304837236722,
+              "trades": 391
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 77.0225951873476,
+              "gross_return_pct": 77.04256000000001,
+              "cost_drag_pct": 0.019964812652399997,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -3.1125861871127536,
+              "gross_return_pct": 0.9899388000000005,
+              "cost_drag_pct": 4.102524987112754,
+              "trades": 391
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.98765433208561,
+              "gross_return_pct": 77.04256000000001,
+              "cost_drag_pct": 0.0549056679144,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -6.3877217756317055,
+              "gross_return_pct": 0.9507588000000018,
+              "cost_drag_pct": 7.338480575631707,
+              "trades": 391
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.9427306961712,
+              "gross_return_pct": 77.04256,
+              "cost_drag_pct": 0.09982930382879998,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -12.822054966044384,
+              "gross_return_pct": 0.9488589000000012,
+              "cost_drag_pct": 13.770913866044385,
+              "trades": 391
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 76.516634596479,
+              "gross_return_pct": 76.71047999999999,
+              "cost_drag_pct": 0.19384540352100002,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "SPY",
+      "strategy": "hourly_trend_intraday",
+      "batch": "D"
+    },
+    "D:hourly_trend_intraday:QQQ": {
+      "timeframe": "1h",
+      "n_bars": 5236,
+      "data_start": "2023-09-12T13:30:00+00:00",
+      "data_end": "2026-09-09T19:30:00+00:00",
+      "headline": {
+        "kind": "intraday",
+        "gross_return_pct": 1.2345891000000058,
+        "net_return_pct": 0.5113760236300058,
+        "total_costs": 723.21307637,
+        "cost_drag_pct": 0.72321307637,
+        "gross_edge_kept_pct": 41.42074667838906,
+        "max_drawdown_pct": 0.6992530908347616,
+        "sharpe_daily": 0.27867315043994617,
+        "avg_exposure_pct": 3.1600255894592046,
+        "turnover": 72.3213064024109,
+        "win_rate_pct": 55.945945945945944,
+        "profit_factor": 1.0739192712547903,
+        "n_closed_trades": 370,
+        "intraday": {
+          "trades": 370,
+          "trades_per_day": 0.49267643142476697,
+          "sessions": 751,
+          "avg_holding_seconds": 20101.62162162162,
+          "median_holding_seconds": 21600.0,
+          "avg_holding_minutes": 335.027027027027,
+          "overnight_positions": 0,
+          "win_rate_pct": 55.945945945945944,
+          "profit_factor": 1.0739192712547903,
+          "avg_pnl_per_trade": 1.3820973611621623,
+          "gross_return_pct": 1.2345891000000058,
+          "net_return_pct": 0.5113760236300058,
+          "total_costs": 723.21307637,
+          "cost_drag_pct": 0.72321307637,
+          "gross_edge_kept_pct": 41.42074667838906,
+          "max_drawdown_pct": 0.6992530908347616,
+          "sharpe_daily": 0.27867315043994617,
+          "avg_exposure_pct": 3.1600255894592046,
+          "turnover": 72.3213064024109,
+          "pnl_per_unit_turnover": 7.070890295933019e-05,
+          "long_trades": 370,
+          "short_trades": 0,
+          "complete_sessions": 751,
+          "incomplete_sessions_discarded": 0
+        },
+        "session_audit": {
+          "timeframe": "1h",
+          "totals": {
+            "total": 751,
+            "complete": 751,
+            "incomplete": 0
+          },
+          "per_symbol": {
+            "QQQ": {
+              "total": 751,
+              "complete": 751,
+              "incomplete": 0,
+              "discarded": []
+            }
+          },
+          "kept_sessions": 751
+        }
+      },
+      "subwindows": [
+        {
+          "window": 0,
+          "start": "2023-09-12T13:30:00+00:00",
+          "end": "2024-09-10T19:30:00+00:00",
+          "net_return_pct": 0.28858497099999436,
+          "gross_return_pct": 0.5300499999999944,
+          "sharpe_daily": 0.468281601442533,
+          "trades": 123
+        },
+        {
+          "window": 1,
+          "start": "2024-09-11T13:30:00+00:00",
+          "end": "2025-09-10T19:30:00+00:00",
+          "net_return_pct": 0.032073997000003907,
+          "gross_return_pct": 0.2891500000000039,
+          "sharpe_daily": 0.05423627874124982,
+          "trades": 132
+        },
+        {
+          "window": 2,
+          "start": "2025-09-11T13:30:00+00:00",
+          "end": "2026-09-09T19:30:00+00:00",
+          "net_return_pct": 0.16824428068999975,
+          "gross_return_pct": 0.3673784999999997,
+          "sharpe_daily": 0.28640036309550027,
+          "trades": 103
+        }
+      ],
+      "cost_sensitivity": [
+        {
+          "scenario": {
+            "label": "frictionless",
+            "slippage_bps": 0,
+            "commission_bps": 0,
+            "spread_bps": 0
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": 1.2342540999999985,
+              "gross_return_pct": 1.2342540999999985,
+              "cost_drag_pct": 0.0,
+              "trades": 370
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.26735,
+              "gross_return_pct": 94.26735,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "low",
+            "slippage_bps": 1,
+            "commission_bps": 0.5,
+            "spread_bps": 1
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -0.20706214537956624,
+              "gross_return_pct": 1.232058499999995,
+              "cost_drag_pct": 1.4391206453795613,
+              "trades": 370
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.24738034516602,
+              "gross_return_pct": 94.26735,
+              "cost_drag_pct": 0.019969654833974997,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "moderate",
+            "slippage_bps": 3,
+            "commission_bps": 1,
+            "spread_bps": 3
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -2.7583454183443656,
+              "gross_return_pct": 1.1524585000000012,
+              "cost_drag_pct": 3.910803918344367,
+              "trades": 370
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.21243101549615,
+              "gross_return_pct": 94.26735000000001,
+              "cost_drag_pct": 0.054918984503849994,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "high",
+            "slippage_bps": 5,
+            "commission_bps": 1,
+            "spread_bps": 8
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -5.810515114544335,
+              "gross_return_pct": 1.1717296000000017,
+              "cost_drag_pct": 6.982244714544336,
+              "trades": 370
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 94.1674964839923,
+              "gross_return_pct": 94.26735,
+              "cost_drag_pct": 0.09985351600769998,
+              "trades": 0
+            }
+          }
+        },
+        {
+          "scenario": {
+            "label": "stress",
+            "slippage_bps": 10,
+            "commission_bps": 2,
+            "spread_bps": 15
+          },
+          "accounts": {
+            "hourly_trend_intraday": {
+              "net_return_pct": -12.065354299339948,
+              "gross_return_pct": 1.1165430000000036,
+              "cost_drag_pct": 13.181897299339951,
+              "trades": 370
+            },
+            "cash": {
+              "net_return_pct": 0.0,
+              "gross_return_pct": 0.0,
+              "cost_drag_pct": 0.0,
+              "trades": 0
+            },
+            "buy_and_hold": {
+              "net_return_pct": 93.725486788365,
+              "gross_return_pct": 93.9195,
+              "cost_drag_pct": 0.194013211635,
+              "trades": 0
+            }
+          }
+        }
+      ],
+      "symbol": "QQQ",
+      "strategy": "hourly_trend_intraday",
+      "batch": "D"
+    }
+  }
+}
