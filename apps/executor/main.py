@@ -171,12 +171,42 @@ class OrderTracker:
         self.orders_failed = 0
         rows = list(self.db.execute('SELECT broker_id,intent,qty,notional,status FROM orders'))
         for broker_id, payload, qty, notional, status in rows:
-            self.add_pending_order(OrderIntent.model_validate_json(payload), broker_id)
-            self.orders_by_broker_id[broker_id].update(total_filled=Decimal(qty), total_notional=Decimal(notional), status=status)
-            self.orders_by_broker_id[broker_id]['remaining_quantity'] -= Decimal(qty)
-            if status in TERMINAL_STATUSES:
-                self.pending_orders.pop(broker_id, None)
-            self.checkpoint(broker_id)
+            self._rehydrate(broker_id, OrderIntent.model_validate_json(payload),
+                            Decimal(qty), Decimal(notional), status)
+
+    def _rehydrate(self, broker_id, order_intent, total_filled, total_notional, status):
+        """Rebuild in-memory state from the journal WITHOUT writing back.
+
+        The journal already holds the accumulated truth. The previous restore path called
+        add_pending_order first, which re-persisted reset state (total_filled=0) before restoring
+        the accumulators and also re-incremented orders_submitted; a crash in that window could
+        overwrite real fills with zero. This reads only, restores the FSM to the journalled
+        status, and never re-persists.
+        """
+        from lib.order_fsm import create_fsm_from_order_intent, OrderState
+        status = (status or "submitted").lower()
+        fsm = create_fsm_from_order_intent(order_intent, broker_id)
+        try:
+            fsm.current_state = OrderState(status)
+        except ValueError:
+            pass  # unknown status -> leave the freshly-created SUBMITTED state
+        fsm.filled_quantity = total_filled
+        fsm.remaining_quantity = order_intent.quantity - total_filled
+        fsm._set_timeout()
+        self.order_fsms[broker_id] = fsm
+
+        order_data = {
+            "intent": order_intent, "broker_id": broker_id,
+            "submitted_at": MonotonicTimer.current(), "status": status, "fills": [],
+            "total_filled": total_filled, "total_notional": total_notional,
+            "remaining_quantity": order_intent.quantity - total_filled, "fsm": fsm,
+        }
+        self.orders_by_client_id[order_intent.client_order_id] = order_data
+        self.orders_by_broker_id[broker_id] = order_data
+        if status in TERMINAL_STATUSES or order_data["remaining_quantity"] <= 0:
+            self.pending_orders.pop(broker_id, None)
+        else:
+            self.pending_orders[broker_id] = order_intent
 
     def checkpoint(self, broker_id, fill=None):
         order = self.orders_by_broker_id[broker_id]

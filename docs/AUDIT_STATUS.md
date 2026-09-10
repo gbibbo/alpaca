@@ -12,7 +12,7 @@ Baseline commits: handover integration `21fa8d3`; engine correctness `77338f0`; 
 
 ## P0 — broker execution / durability / stop (mostly PENDING; not needed until paper/live)
 - **done** — Legacy `HistoricalSimulator` bus replay disabled in backtest mode (`77338f0`).
-- **pending** — `OrderTracker` restart writes initial state before restoring; make memory/journal/outbox atomic and rehydrate without writing.
+- **done** — `OrderTracker` now rehydrates from the journal **without writing** (`_rehydrate`): accumulated fills survive a crash mid-restore, the FSM is restored to the journalled status, and `orders_submitted` is not re-inflated on restart. Tested (`tests/test_executor_durability.py`). **Pending**: injected fault before/after checkpoint/publish as a stress test.
 - **pending** — Bracket legs not registered/reconciled as own orders; recover historical fills after restart.
 - **pending** — Conservative SELL exits vs. shares reserved by bracket legs (safe cancel/replace before strategic exit).
 - **pending** — Stop: authorized resume endpoint, per-instance/order fresh ACK, race avoidance; don't report "stopped" on a stale ACK.
